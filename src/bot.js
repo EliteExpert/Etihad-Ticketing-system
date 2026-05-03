@@ -24,6 +24,9 @@ import {
 const token = process.env.DISCORD_TOKEN;
 const clientId = process.env.DISCORD_CLIENT_ID;
 const guildId = process.env.DISCORD_GUILD_ID;
+const boardingPassApiUrl =
+  process.env.BOARDING_PASS_API_URL ??
+  'https://etihad-ticketing-system-production.up.railway.app/generate-boarding-pass';
 
 const BUSINESS_ROLE_ID = '1499998210163478609';
 const FIRST_ROLE_ID = '1499998296209625258';
@@ -92,15 +95,122 @@ const form3 = modal('form_3', 'Form 3', [
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 client.once(Events.ClientReady, c => console.log(`Logged in as ${c.user.tag}`));
 
-function classConfig(customId) {
-  if (customId === 'business_class') return { name: 'Business class', roleId: BUSINESS_ROLE_ID, varKey: '{business.name}' };
-  if (customId === 'first_class') return { name: 'First class', roleId: FIRST_ROLE_ID, varKey: '{first.name}' };
-  return { name: 'Economy class', roleId: null, varKey: '{economy.name}' };
+function classConfig(customIdOrClass) {
+  if (customIdOrClass === 'business_class' || customIdOrClass === 'business') {
+    return {
+      name: 'Business class',
+      roleId: BUSINESS_ROLE_ID,
+      varKey: '{business.name}',
+      classType: 'business',
+      zone: '2',
+      skywardsNumber: '87654321',
+      additionalInfo: 'Priority boarding'
+    };
+  }
+
+  if (customIdOrClass === 'first_class' || customIdOrClass === 'first') {
+    return {
+      name: 'First class',
+      roleId: FIRST_ROLE_ID,
+      varKey: '{first.name}',
+      classType: 'first',
+      zone: '1',
+      skywardsNumber: '271646124',
+      additionalInfo: 'Chauffeur available'
+    };
+  }
+
+  return {
+    name: 'Economy class',
+    roleId: null,
+    varKey: '{economy.name}',
+    classType: 'economy',
+    zone: '3',
+    skywardsNumber: '12345678',
+    additionalInfo: 'Enjoy your flight!'
+  };
 }
 
 function formatPassengerList(classNames) {
-  const booked = Object.values(classNames).filter(Boolean);
-  return booked.length ? booked.map(name => `• ${name}`).join('\n') : 'No passengers booked yet.';
+  const labels = {
+    '{economy.name}': 'Economy',
+    '{business.name}': 'Business',
+    '{first.name}': 'First'
+  };
+  const booked = Object.entries(classNames)
+    .filter(([, name]) => Boolean(name))
+    .map(([key, name]) => `- ${labels[key]}: ${name}`);
+
+  return booked.length ? booked.join('\n') : 'No passengers booked yet.';
+}
+
+function buildFlightContainer(data, classNames) {
+  const container = new ContainerBuilder();
+  const bannerUrl = data['flight-details-3.banner'];
+
+  if (/^https?:\/\//i.test(bannerUrl)) {
+    container.addMediaGalleryComponents(new MediaGalleryBuilder().addItems({ media: { url: bannerUrl } }));
+  }
+
+  return container
+    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small))
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        `> An Etihad flight has been dispatched from **${data['flight-details.departure-airport']}** to **${data['flight-details.arrival-airport']}**.\n` +
+          `\n` +
+          `**Flight**: ${data['flight-details.flight-number']}\n` +
+          `**Date**: ${data['flight-details2.date']}\n` +
+          `**Check-in opens (GMT)**: ${data['flight-details2.timestamp1']}\n` +
+          `**Boarding (GMT)**: ${data['flight-details2.boarding-time']}\n` +
+          `**Departure (GMT)**: ${data['flight-details2.timestamp2']}\n` +
+          `**Gate closes (GMT)**: ${data['flight-details2.closing-time']}\n` +
+          `**Aircraft**: ${data['flight-details-3.aircraft']}\n` +
+          `\n` +
+          `**Passengers booked**\n${formatPassengerList(classNames)}`
+      )
+    )
+    .addActionRowComponents(row =>
+      row.addComponents(
+        new ButtonBuilder().setCustomId('eco_class').setLabel('Economy class').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId('business_class').setLabel('Business class').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('first_class').setLabel('First class').setStyle(ButtonStyle.Danger)
+      )
+    );
+}
+
+function buildBoardingPassPayload(session, cls, passengerName) {
+  const data = session.flightData;
+
+  return {
+    class: cls.classType,
+    passenger_name: passengerName,
+    flight: data['flight-details.flight-number'],
+    departure_date: data['flight-details2.date'],
+    departure_time: data['flight-details2.closing-time'],
+    zone: cls.zone,
+    boarding_at: data['flight-details2.boarding-time'],
+    gate_closes_at: data['flight-details2.closing-time'],
+    departing_from: data['flight-details.iata1'],
+    arriving_at: data['flight-details.iata2'],
+    skywards_number: cls.skywardsNumber,
+    additional_info: cls.additionalInfo
+  };
+}
+
+async function generateBoardingPass(payload) {
+  const response = await fetch(boardingPassApiUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+
+  const result = await response.json().catch(() => null);
+  if (!response.ok || !result) {
+    const message = result?.error ?? `Boarding pass API returned ${response.status}`;
+    throw new Error(message);
+  }
+
+  return result.output ?? result.image_url ?? result.download_url;
 }
 
 client.on(Events.InteractionCreate, async interaction => {
@@ -108,10 +218,13 @@ client.on(Events.InteractionCreate, async interaction => {
     if (interaction.isChatInputCommand() && interaction.commandName === 'create_flight') {
       sessions.set(interaction.user.id, {
         channelId: interaction.options.getChannel('channel', true).id,
+        messageId: null,
         form1: null,
         form2: null,
         form3: null,
+        flightData: null,
         eventLink: null,
+        bookings: {},
         classNames: {
           '{economy.name}': null,
           '{business.name}': null,
@@ -168,43 +281,15 @@ client.on(Events.InteractionCreate, async interaction => {
           'flight-details-3.aircraft': interaction.fields.getTextInputValue('aircraft')
         };
         s.eventLink = s.form3['flight-details-3.link'];
+        s.flightData = { ...s.form1, ...s.form2, ...s.form3 };
 
-        const data = { ...s.form1, ...s.form2, ...s.form3 };
         const ch = await client.channels.fetch(s.channelId);
         if (!ch || !ch.isTextBased()) throw new Error('Selected channel is not a text channel.');
 
-        const container = new ContainerBuilder();
-        const bannerUrl = data['flight-details-3.banner'];
-        if (/^https?:\/\//i.test(bannerUrl)) {
-          container.addMediaGalleryComponents(new MediaGalleryBuilder().addItems({ media: { url: bannerUrl } }));
-        }
+        const sentMessage = await ch.send({ components: [buildFlightContainer(s.flightData, s.classNames)], flags: MessageFlags.IsComponentsV2 });
+        s.messageId = sentMessage.id;
+        sessions.set(sentMessage.id, s);
 
-        container
-          .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small))
-          .addTextDisplayComponents(
-            new TextDisplayBuilder().setContent(
-              `> An Etihad flight has been dispatched from **${data['flight-details.departure-airport']}** to **${data['flight-details.arrival-airport']}**.\n` +
-                `\n` +
-                `**Flight**: ${data['flight-details.flight-number']}\n` +
-                `**Date**: ${data['flight-details2.date']}\n` +
-                `**Check-in opens (GMT)**: ${data['flight-details2.timestamp1']}\n` +
-                `**Boarding (GMT)**: ${data['flight-details2.boarding-time']}\n` +
-                `**Departure (GMT)**: ${data['flight-details2.timestamp2']}\n` +
-                `**Gate closes (GMT)**: ${data['flight-details2.closing-time']}\n` +
-                `**Aircraft**: ${data['flight-details-3.aircraft']}\n` +
-                `\n` +
-                `**Passengers booked**\n${formatPassengerList(s.classNames)}`
-            )
-          )
-          .addActionRowComponents(row =>
-            row.addComponents(
-              new ButtonBuilder().setCustomId('eco_class').setLabel('Economy class').setStyle(ButtonStyle.Success),
-              new ButtonBuilder().setCustomId('business_class').setLabel('Business class').setStyle(ButtonStyle.Primary),
-              new ButtonBuilder().setCustomId('first_class').setLabel('First class').setStyle(ButtonStyle.Danger)
-            )
-          );
-
-        await ch.send({ components: [container], flags: MessageFlags.IsComponentsV2 });
         await interaction.reply({ content: `All forms completed. Message sent to <#${s.channelId}>.`, flags: MessageFlags.Ephemeral });
       }
       return;
@@ -215,8 +300,8 @@ client.on(Events.InteractionCreate, async interaction => {
       if (interaction.customId === 'proceed_3') return void (await interaction.showModal(form3));
 
       if (['eco_class', 'business_class', 'first_class'].includes(interaction.customId)) {
-        const s = sessions.get(interaction.user.id);
-        if (!s?.eventLink) {
+        const s = sessions.get(interaction.message.id);
+        if (!s?.eventLink || !s.flightData) {
           await interaction.reply({ content: 'No saved flight data found. Please run /create_flight again.', flags: MessageFlags.Ephemeral });
           return;
         }
@@ -226,13 +311,17 @@ client.on(Events.InteractionCreate, async interaction => {
         if (cls.roleId) {
           const hasRole = member?.roles?.cache?.has?.(cls.roleId);
           if (!hasRole) {
-            await interaction.reply({ content: `❌ You need the required role for ${cls.name}.`, flags: MessageFlags.Ephemeral });
+            await interaction.reply({ content: `You need the required role for ${cls.name}.`, flags: MessageFlags.Ephemeral });
             return;
           }
         }
 
-        const passengerName = interaction.user.username;
+        const passengerName = interaction.member?.displayName ?? interaction.user.username;
         s.classNames[cls.varKey] = passengerName;
+        s.bookings[interaction.user.id] = { classType: cls.classType, passengerName };
+
+        await interaction.message.edit({ components: [buildFlightContainer(s.flightData, s.classNames)] });
+
         const bookingContainer = new ContainerBuilder()
           .addTextDisplayComponents(
             new TextDisplayBuilder().setContent(
@@ -242,7 +331,7 @@ client.on(Events.InteractionCreate, async interaction => {
           .addActionRowComponents(row =>
             row.addComponents(
               new ButtonBuilder().setLabel('Flight event link').setStyle(ButtonStyle.Link).setURL(s.eventLink),
-              new ButtonBuilder().setCustomId('get_itinerary').setLabel('Get itinerary').setStyle(ButtonStyle.Success)
+              new ButtonBuilder().setCustomId(`get_itinerary:${interaction.message.id}:${cls.classType}`).setLabel('Get itinerary').setStyle(ButtonStyle.Success)
             )
           )
           .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small));
@@ -251,19 +340,37 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      if (interaction.customId === 'get_itinerary') {
+      if (interaction.customId.startsWith('get_itinerary:')) {
+        const [, messageId, classType] = interaction.customId.split(':');
+        const s = sessions.get(messageId);
+
+        if (!s?.flightData) {
+          await interaction.reply({ content: 'No saved flight data found. Please book again from the flight message.', flags: MessageFlags.Ephemeral });
+          return;
+        }
+
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+        const cls = classConfig(classType);
+        const passengerName = s.bookings[interaction.user.id]?.passengerName ?? interaction.member?.displayName ?? interaction.user.username;
+        const payload = buildBoardingPassPayload(s, cls, passengerName);
+        const output = await generateBoardingPass(payload);
+
         const itineraryContainer = new ContainerBuilder().addTextDisplayComponents(
           new TextDisplayBuilder().setContent(
-            `✅ Itinerary request queued for **${interaction.user.username}**.\n(API request intentionally left blank for now.)`
+            output ? `Your boarding pass is ready:\n${output}` : 'Your boarding pass was generated, but no output URL was returned.'
           )
         );
-        await interaction.reply({ components: [itineraryContainer], flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2 });
+
+        await interaction.editReply({ components: [itineraryContainer], flags: MessageFlags.IsComponentsV2 });
       }
     }
   } catch (error) {
     console.error(error);
     if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) {
       await interaction.reply({ content: 'Error while processing request.', flags: MessageFlags.Ephemeral });
+    } else if (interaction.isRepliable() && interaction.deferred) {
+      await interaction.editReply({ content: `Error while processing request: ${error.message}` });
     }
   }
 });
