@@ -178,7 +178,8 @@ client.on(Events.InteractionCreate, async interaction => {
           .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small))
           .addTextDisplayComponents(
             new TextDisplayBuilder().setContent(
-              `> An Emirates flight has been dispatched from **${data['flight-details.departure-airport']}** to **${data['flight-details.arrival-airport']}**.\n` +
+              `> An Etihad flight has been dispatched from **${data['flight-details.departure-airport']}** to **${data['flight-details.arrival-airport']}**.\n` +
+              
                 `**Flight**: ${data['flight-details.flight-number']}\n` +
                 `**Date**: ${data['flight-details2.date']}\n` +
                 `**Check-in opens (GMT)**: ${data['flight-details2.timestamp1']}\n` +
