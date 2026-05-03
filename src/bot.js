@@ -317,7 +317,7 @@ client.on(Events.InteractionCreate, async interaction => {
         }
 
         const passengerName = interaction.member?.displayName ?? interaction.user.username;
-        s.classNames[cls.varKey] = passengerName;
+        s.classNames[cls.varKey] = `<@${interaction.user.id}>`;
         s.bookings[interaction.user.id] = { classType: cls.classType, passengerName };
 
         await interaction.message.edit({ components: [buildFlightContainer(s.flightData, s.classNames)] });
