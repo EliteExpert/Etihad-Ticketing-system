@@ -356,11 +356,16 @@ client.on(Events.InteractionCreate, async interaction => {
         const payload = buildBoardingPassPayload(s, cls, passengerName);
         const imageUrl = await generateBoardingPass(payload);
 
-        const itineraryContainer = new ContainerBuilder().addTextDisplayComponents(
-          new TextDisplayBuilder().setContent(
-            imageUrl ? `Your boarding pass is ready:\n${imageUrl}` : 'Your boarding pass was generated, but no image URL was returned.'
-          )
-        );
+        const itineraryContainer = new ContainerBuilder();
+        if (imageUrl) {
+          itineraryContainer
+            .addTextDisplayComponents(new TextDisplayBuilder().setContent('Your boarding pass is ready:'))
+            .addMediaGalleryComponents(new MediaGalleryBuilder().addItems({ media: { url: imageUrl } }));
+        } else {
+          itineraryContainer.addTextDisplayComponents(
+            new TextDisplayBuilder().setContent('Your boarding pass was generated, but no image URL was returned.')
+          );
+        }
 
         await interaction.editReply({ components: [itineraryContainer], flags: MessageFlags.IsComponentsV2 });
       }
