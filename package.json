@@ -5,7 +5,12 @@
   "main": "src/bot.js",
   "type": "module",
   "scripts": {
-    "start": "node src/bot.js"
+    "start": "node src/bot.js",
+    "start:bot": "node src/bot.js",
+    "start:api": "gunicorn app:app"
+  },
+  "engines": {
+    "node": ">=18"
   },
   "dependencies": {
     "discord.js": "^14.16.3",
