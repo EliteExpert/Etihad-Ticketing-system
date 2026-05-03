@@ -269,6 +269,7 @@ def generate_boarding_pass():
         
         return jsonify({
             "success": True,
+            "output": image_url,
             "ticket_number": ticket_number,
             "barcode_data": barcode_data,
             "image_url": image_url,
@@ -354,4 +355,3 @@ def api_status():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
-
