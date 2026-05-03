@@ -1,5 +1,5 @@
 Flask==2.3.3
 Flask-CORS==4.0.0
-Pillow==10.0.0
+Pillow==10.4.0
 python-barcode==0.14.0
 gunicorn==20.1.0
