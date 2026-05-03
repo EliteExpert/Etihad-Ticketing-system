@@ -25,8 +25,8 @@ const token = process.env.DISCORD_TOKEN;
 const clientId = process.env.DISCORD_CLIENT_ID;
 const guildId = process.env.DISCORD_GUILD_ID;
 
-const BUSINESS_ROLE_ID = '1331852990629417020';
-const FIRST_ROLE_ID = '1331853227720708146';
+const BUSINESS_ROLE_ID = '1499998210163478609';
+const FIRST_ROLE_ID = '1499998296209625258';
 
 if (!token || !clientId || !guildId) {
   throw new Error('Missing DISCORD_TOKEN, DISCORD_CLIENT_ID, or DISCORD_GUILD_ID in environment.');
