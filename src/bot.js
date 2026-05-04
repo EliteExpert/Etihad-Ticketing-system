@@ -181,13 +181,13 @@ function buildFlightContainer(data, classNames) {
       new TextDisplayBuilder().setContent(
         `> An Etihad flight has been dispatched from **${data['flight-details.departure-airport']}** to **${data['flight-details.arrival-airport']}**.\n` +
           `\n` +
-          `**Flight**: ${data['flight-details.flight-number']}\n` +
-          `**Date**: ${data['flight-details2.date']}\n` +
-          `**Check-in opens (GMT)**: ${data['flight-details2.timestamp1']}\n` +
-          `**Boarding (GMT)**: ${data['flight-details2.boarding-time']}\n` +
+          `<:aircraft:1500907338218082384> **Flight**: ${data['flight-details.flight-number']}\n` +
+          `<:calendar~1:1500907411618271253> **Date**: ${data['flight-details2.date']}\n` +
+          `<:clock~1:1500907384510480454> **Check-in opens (GMT)**: ${data['flight-details2.timestamp1']}\n` +
+          `<:clock~1:1500907384510480454> **Boarding (GMT)**: ${data['flight-details2.boarding-time']}\n` +
           `**Departure (GMT)**: ${data['flight-details2.timestamp2']}\n` +
-          `**Gate closes (GMT)**: ${data['flight-details2.closing-time']}\n` +
-          `**Aircraft**: ${data['flight-details-3.aircraft']}\n` +
+          `<:clock~1:1500907384510480454> **Gate closes (GMT)**: ${data['flight-details2.closing-time']}\n` +
+          `<:EtihadTail:1500012291188461660> **Aircraft**: ${data['flight-details-3.aircraft']}\n` +
           `\n` +
           `**Passengers booked**\n${formatPassengerList(classNames)}`
       )
