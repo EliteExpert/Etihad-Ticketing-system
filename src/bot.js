@@ -189,7 +189,7 @@ function buildFlightContainer(data, classNames) {
           `<:eyclock:1500907384510480454> **Gate closes (GMT)**: ${data['flight-details2.closing-time']}\n` +
           `<:EtihadTail:1500012291188461660> **Aircraft**: ${data['flight-details-3.aircraft']}\n` +
           `\n` +
-          `**Passengers booked**\n${formatPassengerList(classNames)}`
+          `<:user:1500907475644186874> **Passengers booked**\n${formatPassengerList(classNames)}`
       )
     )
     .addActionRowComponents(row =>
