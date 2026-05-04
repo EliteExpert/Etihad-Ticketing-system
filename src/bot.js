@@ -185,7 +185,7 @@ function buildFlightContainer(data, classNames) {
           `<:eycalendar:1500907411618271253> **Date**: ${data['flight-details2.date']}\n` +
           `<:eyclock:1500907384510480454> **Check-in opens (GMT)**: ${data['flight-details2.timestamp1']}\n` +
           `<:eyclock:1500907384510480454> **Boarding (GMT)**: ${data['flight-details2.boarding-time']}\n` +
-          `**Departure (GMT)**: ${data['flight-details2.timestamp2']}\n` +
+          `<:eyclock:1500907384510480454> **Departure (GMT)**: ${data['flight-details2.timestamp2']}\n` +
           `<:eyclock:1500907384510480454> **Gate closes (GMT)**: ${data['flight-details2.closing-time']}\n` +
           `<:EtihadTail:1500012291188461660> **Aircraft**: ${data['flight-details-3.aircraft']}\n` +
           `\n` +
