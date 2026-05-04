@@ -131,6 +131,14 @@ function classConfig(customIdOrClass) {
   };
 }
 
+function emptyClassNames() {
+  return {
+    '{economy.name}': [],
+    '{business.name}': [],
+    '{first.name}': []
+  };
+}
+
 function formatPassengerList(classNames) {
   const labels = {
     '{economy.name}': 'Economy',
@@ -138,10 +146,25 @@ function formatPassengerList(classNames) {
     '{first.name}': 'First'
   };
   const booked = Object.entries(classNames)
-    .filter(([, name]) => Boolean(name))
-    .map(([key, name]) => `- ${labels[key]}: ${name}`);
+    .filter(([, names]) => names.length > 0)
+    .map(([key, names]) => `- ${labels[key]}: ${names.join(' ')}`);
 
   return booked.length ? booked.join('\n') : 'No passengers booked yet.';
+}
+
+function addBookingMention(classNames, cls, userId) {
+  const mention = `<@${userId}>`;
+  for (const key of Object.keys(classNames)) {
+    classNames[key] = classNames[key].filter(name => name !== mention);
+  }
+  classNames[cls.varKey].push(mention);
+}
+
+function removeBookingMention(classNames, userId) {
+  const mention = `<@${userId}>`;
+  for (const key of Object.keys(classNames)) {
+    classNames[key] = classNames[key].filter(name => name !== mention);
+  }
 }
 
 function buildFlightContainer(data, classNames) {
@@ -176,6 +199,19 @@ function buildFlightContainer(data, classNames) {
         new ButtonBuilder().setCustomId('first_class').setLabel('First class').setStyle(ButtonStyle.Danger)
       )
     );
+}
+
+async function editFlightMessage(session, sourceMessage = null) {
+  const components = [buildFlightContainer(session.flightData, session.classNames)];
+  if (sourceMessage?.id === session.messageId) {
+    await sourceMessage.edit({ components });
+    return;
+  }
+
+  const channel = await client.channels.fetch(session.channelId);
+  if (!channel?.isTextBased()) throw new Error('Saved channel is not a text channel.');
+  const message = await channel.messages.fetch(session.messageId);
+  await message.edit({ components });
 }
 
 function buildBoardingPassPayload(session, cls, passengerName) {
@@ -225,11 +261,7 @@ client.on(Events.InteractionCreate, async interaction => {
         flightData: null,
         eventLink: null,
         bookings: {},
-        classNames: {
-          '{economy.name}': null,
-          '{business.name}': null,
-          '{first.name}': null
-        }
+        classNames: emptyClassNames()
       });
       await interaction.showModal(form1);
       return;
@@ -317,10 +349,10 @@ client.on(Events.InteractionCreate, async interaction => {
         }
 
         const passengerName = interaction.member?.displayName ?? interaction.user.username;
-        s.classNames[cls.varKey] = `<@${interaction.user.id}>`;
+        addBookingMention(s.classNames, cls, interaction.user.id);
         s.bookings[interaction.user.id] = { classType: cls.classType, passengerName };
 
-        await interaction.message.edit({ components: [buildFlightContainer(s.flightData, s.classNames)] });
+        await editFlightMessage(s, interaction.message);
 
         const bookingContainer = new ContainerBuilder()
           .addTextDisplayComponents(
@@ -331,7 +363,8 @@ client.on(Events.InteractionCreate, async interaction => {
           .addActionRowComponents(row =>
             row.addComponents(
               new ButtonBuilder().setLabel('Flight event link').setStyle(ButtonStyle.Link).setURL(s.eventLink),
-              new ButtonBuilder().setCustomId(`get_itinerary:${interaction.message.id}:${cls.classType}`).setLabel('Get itinerary').setStyle(ButtonStyle.Success)
+              new ButtonBuilder().setCustomId(`get_itinerary:${interaction.message.id}:${cls.classType}`).setLabel('Get itinerary').setStyle(ButtonStyle.Success),
+              new ButtonBuilder().setCustomId(`opt_out:${interaction.message.id}`).setLabel('Opt out').setStyle(ButtonStyle.Secondary)
             )
           )
           .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small));
@@ -340,8 +373,8 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      if (interaction.customId.startsWith('get_itinerary:')) {
-        const [, messageId, classType] = interaction.customId.split(':');
+      if (interaction.customId.startsWith('opt_out:')) {
+        const [, messageId] = interaction.customId.split(':');
         const s = sessions.get(messageId);
 
         if (!s?.flightData) {
@@ -349,11 +382,33 @@ client.on(Events.InteractionCreate, async interaction => {
           return;
         }
 
+        removeBookingMention(s.classNames, interaction.user.id);
+        delete s.bookings[interaction.user.id];
+        await editFlightMessage(s);
+
+        await interaction.reply({ content: 'You have been removed from the passenger list.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      if (interaction.customId.startsWith('get_itinerary:')) {
+        const [, messageId] = interaction.customId.split(':');
+        const s = sessions.get(messageId);
+
+        if (!s?.flightData) {
+          await interaction.reply({ content: 'No saved flight data found. Please book again from the flight message.', flags: MessageFlags.Ephemeral });
+          return;
+        }
+
+        const booking = s.bookings[interaction.user.id];
+        if (!booking) {
+          await interaction.reply({ content: 'You are not currently booked on this flight.', flags: MessageFlags.Ephemeral });
+          return;
+        }
+
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-        const cls = classConfig(classType);
-        const passengerName = s.bookings[interaction.user.id]?.passengerName ?? interaction.member?.displayName ?? interaction.user.username;
-        const payload = buildBoardingPassPayload(s, cls, passengerName);
+        const cls = classConfig(booking.classType);
+        const payload = buildBoardingPassPayload(s, cls, booking.passengerName);
         const imageUrl = await generateBoardingPass(payload);
 
         const itineraryContainer = new ContainerBuilder();
