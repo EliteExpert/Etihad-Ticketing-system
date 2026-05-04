@@ -196,7 +196,8 @@ function buildFlightContainer(data, classNames) {
       row.addComponents(
         new ButtonBuilder().setCustomId('eco_class').setLabel('Economy class').setStyle(ButtonStyle.Success),
         new ButtonBuilder().setCustomId('business_class').setLabel('Business class').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('first_class').setLabel('First class').setStyle(ButtonStyle.Danger)
+        new ButtonBuilder().setCustomId('first_class').setLabel('First class').setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId('opt_out').setLabel('Opt out').setStyle(ButtonStyle.Secondary)
       )
     );
 }
@@ -373,8 +374,9 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      if (interaction.customId.startsWith('opt_out:')) {
-        const [, messageId] = interaction.customId.split(':');
+      if (interaction.customId === 'opt_out' || interaction.customId.startsWith('opt_out:')) {
+        const [, savedMessageId] = interaction.customId.split(':');
+        const messageId = savedMessageId ?? interaction.message.id;
         const s = sessions.get(messageId);
 
         if (!s?.flightData) {
@@ -384,7 +386,7 @@ client.on(Events.InteractionCreate, async interaction => {
 
         removeBookingMention(s.classNames, interaction.user.id);
         delete s.bookings[interaction.user.id];
-        await editFlightMessage(s);
+        await editFlightMessage(s, interaction.message);
 
         await interaction.reply({ content: 'You have been removed from the passenger list.', flags: MessageFlags.Ephemeral });
         return;
