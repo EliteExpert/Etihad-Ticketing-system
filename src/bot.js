@@ -203,7 +203,7 @@ function buildFlightContainer(data, classNames) {
     .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small))
     .addMediaGalleryComponents(
       new MediaGalleryBuilder().addItems({
-        media: { url: 'https://media.discordapp.net/attachments/1499601098749640764/1501167848310177923/image.png?ex=69fb1701&is=69f9c581&hm=44089241770f121b4a0c5b215cb078fb78045f53cd7cbb21e64b97d01ba06630&=&format=webp&quality=lossless&width=1094&height=84' }
+        media: { url: 'https://media.discordapp.net/attachments/1499601098749640764/1501170510128742601/image.png?ex=69fb197c&is=69f9c7fc&hm=f0af26ca3914218b03efff8aef60a58b573b50e65b5cebb51a85a6efed9fd628&=&format=webp&quality=lossless&width=1299&height=101' }
       })
     );
 }
@@ -377,7 +377,7 @@ client.on(Events.InteractionCreate, async interaction => {
           .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small))
           .addMediaGalleryComponents(
             new MediaGalleryBuilder().addItems({
-              media: { url: 'https://media.discordapp.net/attachments/1499601098749640764/1501167848310177923/image.png?ex=69fb1701&is=69f9c581&hm=44089241770f121b4a0c5b215cb078fb78045f53cd7cbb21e64b97d01ba06630&=&format=webp&quality=lossless&width=1094&height=84' }
+              media: { url: 'https://media.discordapp.net/attachments/1499601098749640764/1501170510128742601/image.png?ex=69fb197c&is=69f9c7fc&hm=f0af26ca3914218b03efff8aef60a58b573b50e65b5cebb51a85a6efed9fd628&=&format=webp&quality=lossless&width=1299&height=101' }
             })
           );
 
