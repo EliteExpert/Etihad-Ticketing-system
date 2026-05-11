@@ -32,6 +32,7 @@ const boardingPassApiUrl =
 const BUSINESS_ROLE_ID = '1499998210163478609';
 const FIRST_ROLE_ID = '1499998296209625258';
 const SUPPORT_REQUESTS_CHANNEL_ID = '1503282404146548878';
+const FLIGHT_PING_ROLE_ID = '1503399633936715906';
 const SUPPORT_COLORS = {
   unclaimed: 0x808080,
   inProgress: 0xffcc00,
@@ -345,6 +346,8 @@ function buildFlightContainer(data, classNames) {
     .addTextDisplayComponents(
       new TextDisplayBuilder().setContent(
         `> An Etihad flight has been dispatched from **${data['flight-details.departure-airport']}** to **${data['flight-details.arrival-airport']}**.\n` +
+          `\n` +
+          `<@&${FLIGHT_PING_ROLE_ID}>\n` +
           `\n` +
           `<:aircraft:1500907338218082384> **Flight**: ${data['flight-details.flight-number']}\n` +
           `<:eycalendar:1500907411618271253> **Date**: ${data['flight-details2.date']}\n` +
