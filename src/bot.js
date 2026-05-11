@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -34,11 +35,36 @@ const FIRST_ROLE_ID = '1499998296209625258';
 const SUPPORT_REQUESTS_CHANNEL_ID = '1503282404146548878';
 const SUPPORT_PING_ROLE_ID = '1499607934844403842';
 const FLIGHT_PING_ROLE_ID = '1503399633936715906';
+const FLIGHT_COLOR = 0xffcc00;
+const MILES_DATA_DIR = new URL('../data/', import.meta.url);
+const MILES_DATA_FILE = new URL('../data/miles.json', import.meta.url);
 const SUPPORT_COLORS = {
   unclaimed: 0x808080,
   inProgress: 0xffcc00,
   closed: 0x2ecc71,
   relay: 0xffcc00
+};
+const SHOP_ITEMS = {
+  class_upgrade: {
+    label: 'Class upgrade voucher',
+    price: 900,
+    description: 'Use this as a staff-approved upgrade request on a future flight.'
+  },
+  lounge_pass: {
+    label: 'Lounge access pass',
+    price: 450,
+    description: 'Redeem for lounge access before one eligible flight.'
+  },
+  priority_boarding: {
+    label: 'Priority boarding pass',
+    price: 300,
+    description: 'Redeem for priority boarding on one eligible flight.'
+  },
+  skywards_badge: {
+    label: 'Skywards profile badge',
+    price: 150,
+    description: 'A low-cost cosmetic reward for frequent flyers.'
+  }
 };
 
 if (!token || !clientId || !guildId) {
@@ -55,6 +81,21 @@ const commands = [
         .setDescription('Channel to send the final message in')
         .addChannelTypes(ChannelType.GuildText)
         .setRequired(true)
+    ),
+  new SlashCommandBuilder()
+    .setName('flight_history')
+    .setDescription('View your attended flights and Etihad miles balance.'),
+  new SlashCommandBuilder()
+    .setName('miles_shop')
+    .setDescription('View or buy rewards with your Etihad miles.')
+    .addStringOption(option =>
+      option
+        .setName('item')
+        .setDescription('Reward to buy. Leave blank to view the shop.')
+        .setRequired(false)
+        .addChoices(
+          ...Object.entries(SHOP_ITEMS).map(([value, item]) => ({ name: `${item.label} - ${item.price} miles`, value }))
+        )
     )
 ].map(command => command.toJSON());
 
@@ -119,35 +160,41 @@ function classConfig(customIdOrClass) {
   if (customIdOrClass === 'business_class' || customIdOrClass === 'business') {
     return {
       name: 'Business class',
+      shortName: 'Business',
       roleId: BUSINESS_ROLE_ID,
       varKey: '{business.name}',
       classType: 'business',
       zone: '2',
       skywardsNumber: '87654321',
-      additionalInfo: 'Priority boarding'
+      additionalInfo: 'Priority boarding',
+      milesRange: [250, 500]
     };
   }
 
   if (customIdOrClass === 'first_class' || customIdOrClass === 'first') {
     return {
       name: 'First class',
+      shortName: 'First',
       roleId: FIRST_ROLE_ID,
       varKey: '{first.name}',
       classType: 'first',
       zone: '1',
       skywardsNumber: '271646124',
-      additionalInfo: 'Chauffeur available'
+      additionalInfo: 'Chauffeur available',
+      milesRange: [500, 1000]
     };
   }
 
   return {
     name: 'Economy class',
+    shortName: 'Economy',
     roleId: null,
     varKey: '{economy.name}',
     classType: 'economy',
     zone: '3',
     skywardsNumber: '12345678',
-    additionalInfo: 'Enjoy your flight!'
+    additionalInfo: 'Enjoy your flight!',
+    milesRange: [100, 200]
   };
 }
 
@@ -185,6 +232,57 @@ function removeBookingMention(classNames, userId) {
   for (const key of Object.keys(classNames)) {
     classNames[key] = classNames[key].filter(name => name !== mention);
   }
+}
+
+function userIdFromMention(mention) {
+  return mention.match(/^<@!?(\d+)>$/)?.[1] ?? null;
+}
+
+function randomInt(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+async function loadMilesStore() {
+  try {
+    const raw = await readFile(MILES_DATA_FILE, 'utf8');
+    const parsed = JSON.parse(raw);
+    return parsed?.users ? parsed : { users: {} };
+  } catch (error) {
+    if (error.code !== 'ENOENT') console.error(error);
+    return { users: {} };
+  }
+}
+
+async function saveMilesStore(store) {
+  await mkdir(MILES_DATA_DIR, { recursive: true });
+  await writeFile(MILES_DATA_FILE, JSON.stringify(store, null, 2));
+}
+
+function ensureMilesUser(store, userId) {
+  store.users[userId] ??= { balance: 0, flights: [], purchases: [] };
+  store.users[userId].balance ??= 0;
+  store.users[userId].flights ??= [];
+  store.users[userId].purchases ??= [];
+  return store.users[userId];
+}
+
+function flightRecord(session, cls, miles) {
+  const data = session.flightData;
+  return {
+    flight: data['flight-details.flight-number'],
+    departureAirport: data['flight-details.departure-airport'],
+    arrivalAirport: data['flight-details.arrival-airport'],
+    classType: cls.classType,
+    className: cls.shortName,
+    miles,
+    date: data['flight-details2.date'],
+    completedAt: new Date().toISOString()
+  };
+}
+
+function formatMilesAwards(awards) {
+  if (!awards.length) return 'No passengers were booked, so no miles were distributed.';
+  return awards.map(award => `- <@${award.userId}>: ${award.miles} miles (${award.className})`).join('\n');
 }
 
 function messageTextWithAttachments(message) {
@@ -334,9 +432,12 @@ async function forwardUserMessageToSupport(message, ticket, content) {
   await message.reply('Your message has been added to your support request. Please wait while we connect you to an agent.');
 }
 
-function buildFlightContainer(data, classNames) {
-  const container = new ContainerBuilder();
+function buildFlightContainer(data, classNames, finished = false, milesAwards = []) {
+  const container = new ContainerBuilder().setAccentColor(FLIGHT_COLOR);
   const bannerUrl = data['flight-details-3.banner'];
+  const statusText = finished
+    ? `\n\n**Flight finished**\n${formatMilesAwards(milesAwards)}`
+    : '';
 
   if (/^https?:\/\//i.test(bannerUrl)) {
     container.addMediaGalleryComponents(new MediaGalleryBuilder().addItems({ media: { url: bannerUrl } }));
@@ -358,15 +459,20 @@ function buildFlightContainer(data, classNames) {
           `<:eyclock:1500907384510480454> **Gate closes (GMT)**: ${data['flight-details2.closing-time']}\n` +
           `<:EtihadTail:1500012291188461660> **Aircraft**: ${data['flight-details-3.aircraft']}\n` +
           `\n` +
-          `<:user:1500907475644186874> **Passengers booked**\n${formatPassengerList(classNames)}`
+          `<:user:1500907475644186874> **Passengers booked**\n${formatPassengerList(classNames)}${statusText}`
       )
     )
     .addActionRowComponents(row =>
       row.addComponents(
-        new ButtonBuilder().setCustomId('eco_class').setLabel('Economy class').setStyle(ButtonStyle.Success),
-        new ButtonBuilder().setCustomId('business_class').setLabel('Business class').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('first_class').setLabel('First class').setStyle(ButtonStyle.Danger),
-        new ButtonBuilder().setCustomId('opt_out').setLabel('Opt out').setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId('eco_class').setLabel('Economy class').setStyle(ButtonStyle.Success).setDisabled(finished),
+        new ButtonBuilder().setCustomId('business_class').setLabel('Business class').setStyle(ButtonStyle.Primary).setDisabled(finished),
+        new ButtonBuilder().setCustomId('first_class').setLabel('First class').setStyle(ButtonStyle.Danger).setDisabled(finished),
+        new ButtonBuilder().setCustomId('opt_out').setLabel('Opt out').setStyle(ButtonStyle.Secondary).setDisabled(finished),
+        new ButtonBuilder()
+          .setCustomId('finish_flight')
+          .setLabel(finished ? 'Flight finished' : 'Finish flight')
+          .setStyle(ButtonStyle.Primary)
+          .setDisabled(finished)
       )
     )
     .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small))
@@ -378,7 +484,7 @@ function buildFlightContainer(data, classNames) {
 }
 
 async function editFlightMessage(session, sourceMessage = null) {
-  const components = [buildFlightContainer(session.flightData, session.classNames)];
+  const components = [buildFlightContainer(session.flightData, session.classNames, session.finished, session.milesAwards)];
   if (sourceMessage?.id === session.messageId) {
     await sourceMessage.edit({ components });
     return;
@@ -423,6 +529,75 @@ async function generateBoardingPass(payload) {
   }
 
   return result.image_url ?? result.output ?? result.download_url;
+}
+
+async function finishFlight(session) {
+  if (session.finished) return session.milesAwards ?? [];
+
+  const store = await loadMilesStore();
+  const awards = [];
+
+  for (const [varKey, mentions] of Object.entries(session.classNames)) {
+    const cls = classConfig(varKey === '{business.name}' ? 'business' : varKey === '{first.name}' ? 'first' : 'economy');
+    for (const mention of mentions) {
+      const userId = userIdFromMention(mention);
+      if (!userId) continue;
+
+      const miles = randomInt(cls.milesRange[0], cls.milesRange[1]);
+      const user = ensureMilesUser(store, userId);
+      user.balance += miles;
+      user.flights.push(flightRecord(session, cls, miles));
+      awards.push({ userId, miles, className: cls.shortName });
+    }
+  }
+
+  await saveMilesStore(store);
+  session.finished = true;
+  session.milesAwards = awards;
+  return awards;
+}
+
+function buildHistoryContainer(user, milesUser) {
+  const flights = milesUser.flights.slice(-10).reverse();
+  const history = flights.length
+    ? flights
+        .map(
+          flight =>
+            `- **${flight.flight}**: ${flight.departureAirport} to ${flight.arrivalAirport} | ${flight.className} | +${flight.miles} miles`
+        )
+        .join('\n')
+    : 'No attended flights yet.';
+
+  return new ContainerBuilder()
+    .setAccentColor(FLIGHT_COLOR)
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        `**${user.username}'s Flight History**\n` +
+          `Total balance: **${milesUser.balance} miles**\n\n` +
+          `${history}`
+      )
+    );
+}
+
+function buildShopContainer(user, milesUser, purchaseText = null) {
+  const shopList = Object.entries(SHOP_ITEMS)
+    .map(([, item]) => `- **${item.label}**: ${item.price} miles\n  ${item.description}`)
+    .join('\n');
+  const purchased = milesUser.purchases.length
+    ? `\n\nRecent purchases:\n${milesUser.purchases.slice(-3).reverse().map(item => `- ${item.label} (${item.price} miles)`).join('\n')}`
+    : '';
+
+  return new ContainerBuilder()
+    .setAccentColor(FLIGHT_COLOR)
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        `**Etihad Miles Shop**\n` +
+          `Passenger: ${user}\n` +
+          `Balance: **${milesUser.balance} miles**\n\n` +
+          `${purchaseText ? `${purchaseText}\n\n` : ''}` +
+          `${shopList}${purchased}`
+      )
+    );
 }
 
 client.on(Events.MessageCreate, async message => {
@@ -548,8 +723,40 @@ client.on(Events.InteractionCreate, async interaction => {
       return;
     }
 
+    if (interaction.isChatInputCommand() && interaction.commandName === 'flight_history') {
+      const store = await loadMilesStore();
+      const milesUser = ensureMilesUser(store, interaction.user.id);
+      await interaction.reply({ components: [buildHistoryContainer(interaction.user, milesUser)], flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2 });
+      return;
+    }
+
+    if (interaction.isChatInputCommand() && interaction.commandName === 'miles_shop') {
+      const selectedItem = interaction.options.getString('item');
+      const store = await loadMilesStore();
+      const milesUser = ensureMilesUser(store, interaction.user.id);
+      let purchaseText = null;
+
+      if (selectedItem) {
+        const item = SHOP_ITEMS[selectedItem];
+        if (!item) {
+          purchaseText = 'That shop item could not be found.';
+        } else if (milesUser.balance < item.price) {
+          purchaseText = `You need ${item.price - milesUser.balance} more miles to buy **${item.label}**.`;
+        } else {
+          milesUser.balance -= item.price;
+          milesUser.purchases.push({ key: selectedItem, label: item.label, price: item.price, boughtAt: new Date().toISOString() });
+          await saveMilesStore(store);
+          purchaseText = `Purchased **${item.label}** for ${item.price} miles.`;
+        }
+      }
+
+      await interaction.reply({ components: [buildShopContainer(interaction.user, milesUser, purchaseText)], flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2 });
+      return;
+    }
+
     if (interaction.isChatInputCommand() && interaction.commandName === 'create_flight') {
       sessions.set(interaction.user.id, {
+        creatorId: interaction.user.id,
         channelId: interaction.options.getChannel('channel', true).id,
         messageId: null,
         form1: null,
@@ -558,7 +765,9 @@ client.on(Events.InteractionCreate, async interaction => {
         flightData: null,
         eventLink: null,
         bookings: {},
-        classNames: emptyClassNames()
+        classNames: emptyClassNames(),
+        finished: false,
+        milesAwards: []
       });
       await interaction.showModal(form1);
       return;
@@ -615,7 +824,7 @@ client.on(Events.InteractionCreate, async interaction => {
         const ch = await client.channels.fetch(s.channelId);
         if (!ch || !ch.isTextBased()) throw new Error('Selected channel is not a text channel.');
 
-        const sentMessage = await ch.send({ components: [buildFlightContainer(s.flightData, s.classNames)], flags: MessageFlags.IsComponentsV2 });
+        const sentMessage = await ch.send({ components: [buildFlightContainer(s.flightData, s.classNames, s.finished, s.milesAwards)], flags: MessageFlags.IsComponentsV2 });
         s.messageId = sentMessage.id;
         sessions.set(sentMessage.id, s);
 
@@ -628,10 +837,40 @@ client.on(Events.InteractionCreate, async interaction => {
       if (interaction.customId === 'proceed_2') return void (await interaction.showModal(form2));
       if (interaction.customId === 'proceed_3') return void (await interaction.showModal(form3));
 
+      if (interaction.customId === 'finish_flight') {
+        const s = sessions.get(interaction.message.id);
+        if (!s?.flightData) {
+          await interaction.reply({ content: 'No saved flight data found for this flight.', flags: MessageFlags.Ephemeral });
+          return;
+        }
+
+        if (s.finished) {
+          await interaction.reply({ content: 'This flight has already been finished.', flags: MessageFlags.Ephemeral });
+          return;
+        }
+
+        const awards = await finishFlight(s);
+        await editFlightMessage(s, interaction.message);
+        await interaction.reply({
+          components: [
+            new ContainerBuilder()
+              .setAccentColor(FLIGHT_COLOR)
+              .addTextDisplayComponents(new TextDisplayBuilder().setContent(`**Flight finished**\n${formatMilesAwards(awards)}`))
+          ],
+          flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2
+        });
+        return;
+      }
+
       if (['eco_class', 'business_class', 'first_class'].includes(interaction.customId)) {
         const s = sessions.get(interaction.message.id);
         if (!s?.eventLink || !s.flightData) {
           await interaction.reply({ content: 'No saved flight data found. Please run /create_flight again.', flags: MessageFlags.Ephemeral });
+          return;
+        }
+
+        if (s.finished) {
+          await interaction.reply({ content: 'This flight has already finished.', flags: MessageFlags.Ephemeral });
           return;
         }
 
@@ -652,6 +891,7 @@ client.on(Events.InteractionCreate, async interaction => {
         await editFlightMessage(s, interaction.message);
 
         const bookingContainer = new ContainerBuilder()
+          .setAccentColor(FLIGHT_COLOR)
           .addTextDisplayComponents(
             new TextDisplayBuilder().setContent(
               `# ${cls.name} booking\nPassenger: **${passengerName}**\nSaved as: \`${cls.varKey}\`\nUse the buttons below to continue.`
@@ -685,6 +925,11 @@ client.on(Events.InteractionCreate, async interaction => {
           return;
         }
 
+        if (s.finished) {
+          await interaction.reply({ content: 'This flight has already finished.', flags: MessageFlags.Ephemeral });
+          return;
+        }
+
         removeBookingMention(s.classNames, interaction.user.id);
         delete s.bookings[interaction.user.id];
         await editFlightMessage(s, interaction.message);
@@ -714,7 +959,7 @@ client.on(Events.InteractionCreate, async interaction => {
         const payload = buildBoardingPassPayload(s, cls, booking.passengerName);
         const imageUrl = await generateBoardingPass(payload);
 
-        const itineraryContainer = new ContainerBuilder();
+        const itineraryContainer = new ContainerBuilder().setAccentColor(FLIGHT_COLOR);
         if (imageUrl) {
           itineraryContainer
             .addTextDisplayComponents(new TextDisplayBuilder().setContent('Your boarding pass is ready:'))
