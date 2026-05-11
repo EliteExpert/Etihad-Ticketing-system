@@ -36,6 +36,7 @@ const SUPPORT_REQUESTS_CHANNEL_ID = '1503282404146548878';
 const SUPPORT_PING_ROLE_ID = '1499607934844403842';
 const FLIGHT_PING_ROLE_ID = '1503399633936715906';
 const FLIGHT_COLOR = 0xffcc00;
+const MILES_EMOJI = '<:miles:1503446324471926824>';
 const MILES_DATA_DIR = new URL('../data/', import.meta.url);
 const MILES_DATA_FILE = new URL('../data/miles.json', import.meta.url);
 const SUPPORT_COLORS = {
@@ -282,7 +283,7 @@ function flightRecord(session, cls, miles) {
 
 function formatMilesAwards(awards) {
   if (!awards.length) return 'No passengers were booked, so no miles were distributed.';
-  return awards.map(award => `- <@${award.userId}>: ${award.miles} miles (${award.className})`).join('\n');
+  return awards.map(award => `- <@${award.userId}>: ${MILES_EMOJI} ${award.miles} miles (${award.className})`).join('\n');
 }
 
 function messageTextWithAttachments(message) {
@@ -563,7 +564,7 @@ function buildHistoryContainer(user, milesUser) {
     ? flights
         .map(
           flight =>
-            `- **${flight.flight}**: ${flight.departureAirport} to ${flight.arrivalAirport} | ${flight.className} | +${flight.miles} miles`
+            `- **${flight.flight}**: ${flight.departureAirport} to ${flight.arrivalAirport} | ${flight.className} | ${MILES_EMOJI} +${flight.miles} miles`
         )
         .join('\n')
     : 'No attended flights yet.';
@@ -573,7 +574,7 @@ function buildHistoryContainer(user, milesUser) {
     .addTextDisplayComponents(
       new TextDisplayBuilder().setContent(
         `**${user.username}'s Flight History**\n` +
-          `Total balance: **${milesUser.balance} miles**\n\n` +
+          `Total balance: ${MILES_EMOJI} **${milesUser.balance} miles**\n\n` +
           `${history}`
       )
     );
@@ -581,10 +582,10 @@ function buildHistoryContainer(user, milesUser) {
 
 function buildShopContainer(user, milesUser, purchaseText = null) {
   const shopList = Object.entries(SHOP_ITEMS)
-    .map(([, item]) => `- **${item.label}**: ${item.price} miles\n  ${item.description}`)
+    .map(([, item]) => `- **${item.label}**: ${MILES_EMOJI} ${item.price} miles\n  ${item.description}`)
     .join('\n');
   const purchased = milesUser.purchases.length
-    ? `\n\nRecent purchases:\n${milesUser.purchases.slice(-3).reverse().map(item => `- ${item.label} (${item.price} miles)`).join('\n')}`
+    ? `\n\nRecent purchases:\n${milesUser.purchases.slice(-3).reverse().map(item => `- ${item.label} (${MILES_EMOJI} ${item.price} miles)`).join('\n')}`
     : '';
 
   return new ContainerBuilder()
@@ -593,7 +594,7 @@ function buildShopContainer(user, milesUser, purchaseText = null) {
       new TextDisplayBuilder().setContent(
         `**Etihad Miles Shop**\n` +
           `Passenger: ${user}\n` +
-          `Balance: **${milesUser.balance} miles**\n\n` +
+          `Balance: ${MILES_EMOJI} **${milesUser.balance} miles**\n\n` +
           `${purchaseText ? `${purchaseText}\n\n` : ''}` +
           `${shopList}${purchased}`
       )
@@ -741,12 +742,12 @@ client.on(Events.InteractionCreate, async interaction => {
         if (!item) {
           purchaseText = 'That shop item could not be found.';
         } else if (milesUser.balance < item.price) {
-          purchaseText = `You need ${item.price - milesUser.balance} more miles to buy **${item.label}**.`;
+          purchaseText = `You need ${MILES_EMOJI} ${item.price - milesUser.balance} more miles to buy **${item.label}**.`;
         } else {
           milesUser.balance -= item.price;
           milesUser.purchases.push({ key: selectedItem, label: item.label, price: item.price, boughtAt: new Date().toISOString() });
           await saveMilesStore(store);
-          purchaseText = `Purchased **${item.label}** for ${item.price} miles.`;
+          purchaseText = `Purchased **${item.label}** for ${MILES_EMOJI} ${item.price} miles.`;
         }
       }
 
