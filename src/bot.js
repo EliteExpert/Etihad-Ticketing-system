@@ -32,6 +32,7 @@ const boardingPassApiUrl =
 const BUSINESS_ROLE_ID = '1499998210163478609';
 const FIRST_ROLE_ID = '1499998296209625258';
 const SUPPORT_REQUESTS_CHANNEL_ID = '1503282404146548878';
+const SUPPORT_PING_ROLE_ID = '1499607934844403842';
 const FLIGHT_PING_ROLE_ID = '1503399633936715906';
 const SUPPORT_COLORS = {
   unclaimed: 0x808080,
@@ -230,7 +231,7 @@ function buildSupportRequestContainer(user, content, ticket) {
         `**Etihad Support Request**\n` +
           `Passenger: <@${user.id}>\n` +
           `Status: ${supportStatusText(ticket)}\n` +
-          `Ping: <@1499607934844403842>\n\n` +
+          `Ping: <@&${SUPPORT_PING_ROLE_ID}>\n\n` +
           `**Message**\n${content}\n\n` +
           `Today at ${displayTime()}`
       )
