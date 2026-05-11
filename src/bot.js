@@ -32,6 +32,12 @@ const boardingPassApiUrl =
 const BUSINESS_ROLE_ID = '1499998210163478609';
 const FIRST_ROLE_ID = '1499998296209625258';
 const SUPPORT_REQUESTS_CHANNEL_ID = '1503282404146548878';
+const SUPPORT_COLORS = {
+  unclaimed: 0x808080,
+  inProgress: 0xffcc00,
+  closed: 0x2ecc71,
+  relay: 0xffcc00
+};
 
 if (!token || !clientId || !guildId) {
   throw new Error('Missing DISCORD_TOKEN, DISCORD_CLIENT_ID, or DISCORD_GUILD_ID in environment.');
@@ -192,48 +198,89 @@ function displayTime() {
   return new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Dubai' });
 }
 
-function buildSupportRequestContainer(user, content, ticket, claimedBy = null) {
-  const container = new ContainerBuilder()
+function supportStatusText(ticket) {
+  if (ticket.status === 'closed') return `Closed${ticket.closedBy ? ` by <@${ticket.closedBy}>` : ''}`;
+  if (ticket.claimedBy) return `Claimed by <@${ticket.claimedBy}> - in progress`;
+  return 'Waiting for staff';
+}
+
+function supportColor(ticket) {
+  if (ticket.status === 'closed') return SUPPORT_COLORS.closed;
+  if (ticket.claimedBy) return SUPPORT_COLORS.inProgress;
+  return SUPPORT_COLORS.unclaimed;
+}
+
+function buildSupportActions(userId, ticket) {
+  if (ticket.status === 'closed') return [];
+
+  const row = new ActionRowBuilder();
+  if (!ticket.claimedBy) {
+    row.addComponents(new ButtonBuilder().setCustomId(`support_claim:${userId}`).setLabel('Claim').setStyle(ButtonStyle.Success));
+  }
+  row.addComponents(new ButtonBuilder().setCustomId(`support_close:${userId}`).setLabel('Close').setStyle(ButtonStyle.Danger));
+  return [row];
+}
+
+function buildSupportRequestContainer(user, content, ticket) {
+  return new ContainerBuilder()
+    .setAccentColor(supportColor(ticket))
     .addTextDisplayComponents(
       new TextDisplayBuilder().setContent(
         `**Etihad Support Request**\n` +
           `Passenger: <@${user.id}>\n` +
-          `Status: ${claimedBy ? `Claimed by <@${claimedBy}>` : 'Waiting for staff'}\n\n` +
+          `Status: ${supportStatusText(ticket)}\n\n` +
           `**Message**\n${content}\n\n` +
           `Today at ${displayTime()}`
       )
     );
-
-  if (!claimedBy) {
-    container.addActionRowComponents(row =>
-      row.addComponents(new ButtonBuilder().setCustomId(`support_claim:${user.id}`).setLabel('Claim').setStyle(ButtonStyle.Success))
-    );
-  }
-
-  return container;
 }
 
 function buildSupportConnectingContainer() {
-  return new ContainerBuilder().addTextDisplayComponents(
-    new TextDisplayBuilder().setContent(
-      '**Etihad • Connecting You To An Agent**\n' +
-        'Hello, welcome to Etihad Customer Service Hub. We have received your message and are connecting you to an agent. Please stay with us so we can assist you quickly and efficiently.'
-    )
-  );
+  return new ContainerBuilder()
+    .setAccentColor(SUPPORT_COLORS.inProgress)
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        '**Etihad • Connecting You To An Agent**\n' +
+          'Hello, welcome to Etihad Customer Service Hub. We have received your message and are connecting you to an agent. Please stay with us so we can assist you quickly and efficiently.'
+      )
+    );
 }
 
 function buildSupportConnectedContainer(agent) {
-  return new ContainerBuilder().addTextDisplayComponents(
-    new TextDisplayBuilder().setContent(
-      `Connected. ${agent} has been selected for your inquiry. Please be patient while they review your request.`
-    )
-  );
+  return new ContainerBuilder()
+    .setAccentColor(SUPPORT_COLORS.inProgress)
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        `Connected. ${agent} has been selected for your inquiry. Please be patient while they review your request.`
+      )
+    );
+}
+
+function buildSupportClosedContainer() {
+  return new ContainerBuilder()
+    .setAccentColor(SUPPORT_COLORS.closed)
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent('Your Etihad support request has been closed. Thank you for contacting us.')
+    );
 }
 
 function buildRelayContainer(authorName, content) {
-  return new ContainerBuilder().addTextDisplayComponents(
-    new TextDisplayBuilder().setContent(`**${authorName}**\n${content}\n\nToday at ${displayTime()}`)
-  );
+  return new ContainerBuilder()
+    .setAccentColor(SUPPORT_COLORS.relay)
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(`**${authorName}**\n${content}\n\nToday at ${displayTime()}`)
+    );
+}
+
+async function updateSupportRequestMessage(ticket, content) {
+  const supportChannel = await client.channels.fetch(SUPPORT_REQUESTS_CHANNEL_ID);
+  if (!supportChannel?.isTextBased()) throw new Error('Support requests channel is not a text channel.');
+  const requestMessage = await supportChannel.messages.fetch(ticket.requestMessageId);
+  const user = await client.users.fetch(ticket.userId);
+  await requestMessage.edit({
+    components: [buildSupportRequestContainer(user, content, ticket), ...buildSupportActions(ticket.userId, ticket)],
+    flags: MessageFlags.IsComponentsV2
+  });
 }
 
 async function createSupportRequest(message, content) {
@@ -246,11 +293,12 @@ async function createSupportRequest(message, content) {
     requestMessageId: null,
     threadId: null,
     claimedBy: null,
+    closedBy: null,
     status: 'pending'
   };
 
   const requestMessage = await supportChannel.send({
-    components: [buildSupportRequestContainer(message.author, content, ticket)],
+    components: [buildSupportRequestContainer(message.author, content, ticket), ...buildSupportActions(message.author.id, ticket)],
     flags: MessageFlags.IsComponentsV2
   });
 
@@ -261,6 +309,12 @@ async function createSupportRequest(message, content) {
 }
 
 async function forwardUserMessageToSupport(message, ticket, content) {
+  if (ticket.status === 'closed') {
+    supportTicketsByUser.delete(message.author.id);
+    await createSupportRequest(message, content);
+    return;
+  }
+
   if (ticket.threadId) {
     const thread = await client.channels.fetch(ticket.threadId);
     if (!thread?.isTextBased()) throw new Error('Saved support thread is not a text channel.');
@@ -386,6 +440,9 @@ client.on(Events.MessageCreate, async message => {
     const userId = supportTicketsByThread.get(message.channel.id);
     if (!userId) return;
 
+    const ticket = supportTicketsByUser.get(userId);
+    if (!ticket || ticket.status === 'closed') return;
+
     const user = await client.users.fetch(userId);
     await user.send({
       components: [buildRelayContainer(message.member?.displayName ?? message.author.username, messageTextWithAttachments(message))],
@@ -398,6 +455,57 @@ client.on(Events.MessageCreate, async message => {
 
 client.on(Events.InteractionCreate, async interaction => {
   try {
+    if (interaction.isButton() && interaction.customId.startsWith('support_close_confirm:')) {
+      const userId = interaction.customId.split(':')[1];
+      const ticket = supportTicketsByUser.get(userId);
+
+      if (!ticket) {
+        await interaction.update({ content: 'This support request could not be found.', components: [] });
+        return;
+      }
+
+      ticket.status = 'closed';
+      ticket.closedBy = interaction.user.id;
+      supportTicketsByUser.delete(userId);
+      if (ticket.threadId) supportTicketsByThread.delete(ticket.threadId);
+
+      await updateSupportRequestMessage(ticket, 'Support request closed.');
+
+      const user = await client.users.fetch(userId);
+      await user.send({ components: [buildSupportClosedContainer()], flags: MessageFlags.IsComponentsV2 }).catch(() => null);
+
+      if (ticket.threadId) {
+        const thread = await client.channels.fetch(ticket.threadId).catch(() => null);
+        if (thread?.isTextBased()) {
+          await thread.send({ components: [buildRelayContainer('Etihad Support', `Closed by <@${interaction.user.id}>.`)], flags: MessageFlags.IsComponentsV2 });
+          await thread.setArchived(true).catch(() => null);
+        }
+      }
+
+      await interaction.update({ content: 'Support request closed.', components: [] });
+      return;
+    }
+
+    if (interaction.isButton() && interaction.customId.startsWith('support_close_cancel:')) {
+      await interaction.update({ content: 'Close cancelled.', components: [] });
+      return;
+    }
+
+    if (interaction.isButton() && interaction.customId.startsWith('support_close:')) {
+      const userId = interaction.customId.split(':')[1];
+      await interaction.reply({
+        content: 'Close this support request?',
+        flags: MessageFlags.Ephemeral,
+        components: [
+          new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`support_close_confirm:${userId}`).setLabel('Confirm close').setStyle(ButtonStyle.Danger),
+            new ButtonBuilder().setCustomId(`support_close_cancel:${userId}`).setLabel('Cancel').setStyle(ButtonStyle.Secondary)
+          )
+        ]
+      });
+      return;
+    }
+
     if (interaction.isButton() && interaction.customId.startsWith('support_claim:')) {
       const userId = interaction.customId.split(':')[1];
       const ticket = supportTicketsByUser.get(userId);
@@ -424,7 +532,7 @@ client.on(Events.InteractionCreate, async interaction => {
 
       const user = await client.users.fetch(userId);
       await interaction.update({
-        components: [buildSupportRequestContainer(user, 'Support request claimed. Continue in the created thread.', ticket, interaction.user.id)],
+        components: [buildSupportRequestContainer(user, 'Support request claimed. Continue in the created thread.', ticket), ...buildSupportActions(userId, ticket)],
         flags: MessageFlags.IsComponentsV2
       });
       await thread.send({
