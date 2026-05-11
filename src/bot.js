@@ -12,6 +12,7 @@ import {
   MessageFlags,
   ModalBuilder,
   Partials,
+  PermissionFlagsBits,
   REST,
   Routes,
   SeparatorBuilder,
@@ -35,8 +36,10 @@ const FIRST_ROLE_ID = '1499998296209625258';
 const SUPPORT_REQUESTS_CHANNEL_ID = '1503282404146548878';
 const SUPPORT_PING_ROLE_ID = '1499607934844403842';
 const FLIGHT_PING_ROLE_ID = '1503399633936715906';
+const FLIGHT_MANAGER_ROLE_ID = '1503457047545512147';
 const FLIGHT_COLOR = 0xffcc00;
 const MILES_EMOJI = '<:miles:1503446324471926824>';
+const ETIHAD_TAIL_EMOJI = '<:EtihadTail:1500012291188461660>';
 const MILES_DATA_DIR = new URL('../data/', import.meta.url);
 const MILES_DATA_FILE = new URL('../data/miles.json', import.meta.url);
 const SUPPORT_COLORS = {
@@ -239,6 +242,36 @@ function userIdFromMention(mention) {
   return mention.match(/^<@!?(\d+)>$/)?.[1] ?? null;
 }
 
+function memberHasRole(member, roleId) {
+  if (member?.roles?.cache?.has?.(roleId)) return true;
+  if (Array.isArray(member?.roles)) return member.roles.includes(roleId);
+  return false;
+}
+
+function hasFlightManagementAccess(interaction) {
+  return Boolean(
+    interaction.memberPermissions?.has(PermissionFlagsBits.Administrator) || memberHasRole(interaction.member, FLIGHT_MANAGER_ROLE_ID)
+  );
+}
+
+function normalizeShopKey(value) {
+  return value
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+function resolveShopItem(value) {
+  if (!value) return [null, null];
+  if (SHOP_ITEMS[value]) return [value, SHOP_ITEMS[value]];
+
+  const normalized = normalizeShopKey(value);
+  if (SHOP_ITEMS[normalized]) return [normalized, SHOP_ITEMS[normalized]];
+
+  return Object.entries(SHOP_ITEMS).find(([, item]) => normalizeShopKey(item.label) === normalized) ?? [null, null];
+}
+
 function randomInt(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
@@ -283,7 +316,7 @@ function flightRecord(session, cls, miles) {
 
 function formatMilesAwards(awards) {
   if (!awards.length) return 'No passengers were booked, so no miles were distributed.';
-  return awards.map(award => `- <@${award.userId}>: ${MILES_EMOJI} ${award.miles} miles (${award.className})`).join('\n');
+  return awards.map(award => `- **${award.displayName}**: ${MILES_EMOJI} ${award.miles} miles (${award.className})`).join('\n');
 }
 
 function messageTextWithAttachments(message) {
@@ -433,12 +466,10 @@ async function forwardUserMessageToSupport(message, ticket, content) {
   await message.reply('Your message has been added to your support request. Please wait while we connect you to an agent.');
 }
 
-function buildFlightContainer(data, classNames, finished = false, milesAwards = []) {
+function buildFlightContainer(data, classNames, finished = false) {
   const container = new ContainerBuilder().setAccentColor(FLIGHT_COLOR);
   const bannerUrl = data['flight-details-3.banner'];
-  const statusText = finished
-    ? `\n\n**Flight finished**\n${formatMilesAwards(milesAwards)}`
-    : '';
+  const statusText = finished ? '\n\n**Flight finished**' : '';
 
   if (/^https?:\/\//i.test(bannerUrl)) {
     container.addMediaGalleryComponents(new MediaGalleryBuilder().addItems({ media: { url: bannerUrl } }));
@@ -485,7 +516,7 @@ function buildFlightContainer(data, classNames, finished = false, milesAwards = 
 }
 
 async function editFlightMessage(session, sourceMessage = null) {
-  const components = [buildFlightContainer(session.flightData, session.classNames, session.finished, session.milesAwards)];
+  const components = [buildFlightContainer(session.flightData, session.classNames, session.finished)];
   if (sourceMessage?.id === session.messageId) {
     await sourceMessage.edit({ components });
     return;
@@ -546,9 +577,10 @@ async function finishFlight(session) {
 
       const miles = randomInt(cls.milesRange[0], cls.milesRange[1]);
       const user = ensureMilesUser(store, userId);
+      const displayName = session.bookings[userId]?.passengerName ?? `User ${userId}`;
       user.balance += miles;
       user.flights.push(flightRecord(session, cls, miles));
-      awards.push({ userId, miles, className: cls.shortName });
+      awards.push({ userId, displayName, miles, className: cls.shortName });
     }
   }
 
@@ -573,7 +605,7 @@ function buildHistoryContainer(user, milesUser) {
     .setAccentColor(FLIGHT_COLOR)
     .addTextDisplayComponents(
       new TextDisplayBuilder().setContent(
-        `**${user.username}'s Flight History**\n` +
+        `${ETIHAD_TAIL_EMOJI} **${user.username}'s Flight History**\n` +
           `Total balance: ${MILES_EMOJI} **${milesUser.balance} miles**\n\n` +
           `${history}`
       )
@@ -738,14 +770,14 @@ client.on(Events.InteractionCreate, async interaction => {
       let purchaseText = null;
 
       if (selectedItem) {
-        const item = SHOP_ITEMS[selectedItem];
+        const [selectedKey, item] = resolveShopItem(selectedItem);
         if (!item) {
           purchaseText = 'That shop item could not be found.';
         } else if (milesUser.balance < item.price) {
           purchaseText = `You need ${MILES_EMOJI} ${item.price - milesUser.balance} more miles to buy **${item.label}**.`;
         } else {
           milesUser.balance -= item.price;
-          milesUser.purchases.push({ key: selectedItem, label: item.label, price: item.price, boughtAt: new Date().toISOString() });
+          milesUser.purchases.push({ key: selectedKey, label: item.label, price: item.price, boughtAt: new Date().toISOString() });
           await saveMilesStore(store);
           purchaseText = `Purchased **${item.label}** for ${MILES_EMOJI} ${item.price} miles.`;
         }
@@ -756,6 +788,11 @@ client.on(Events.InteractionCreate, async interaction => {
     }
 
     if (interaction.isChatInputCommand() && interaction.commandName === 'create_flight') {
+      if (!hasFlightManagementAccess(interaction)) {
+        await interaction.reply({ content: `You need <@&${FLIGHT_MANAGER_ROLE_ID}> or Administrator to create flights.`, flags: MessageFlags.Ephemeral });
+        return;
+      }
+
       sessions.set(interaction.user.id, {
         creatorId: interaction.user.id,
         channelId: interaction.options.getChannel('channel', true).id,
@@ -825,7 +862,7 @@ client.on(Events.InteractionCreate, async interaction => {
         const ch = await client.channels.fetch(s.channelId);
         if (!ch || !ch.isTextBased()) throw new Error('Selected channel is not a text channel.');
 
-        const sentMessage = await ch.send({ components: [buildFlightContainer(s.flightData, s.classNames, s.finished, s.milesAwards)], flags: MessageFlags.IsComponentsV2 });
+        const sentMessage = await ch.send({ components: [buildFlightContainer(s.flightData, s.classNames, s.finished)], flags: MessageFlags.IsComponentsV2 });
         s.messageId = sentMessage.id;
         sessions.set(sentMessage.id, s);
 
@@ -842,6 +879,11 @@ client.on(Events.InteractionCreate, async interaction => {
         const s = sessions.get(interaction.message.id);
         if (!s?.flightData) {
           await interaction.reply({ content: 'No saved flight data found for this flight.', flags: MessageFlags.Ephemeral });
+          return;
+        }
+
+        if (!hasFlightManagementAccess(interaction)) {
+          await interaction.reply({ content: `You need <@&${FLIGHT_MANAGER_ROLE_ID}> or Administrator to finish flights.`, flags: MessageFlags.Ephemeral });
           return;
         }
 
