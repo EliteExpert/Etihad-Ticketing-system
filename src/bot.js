@@ -228,7 +228,8 @@ function buildSupportRequestContainer(user, content, ticket) {
       new TextDisplayBuilder().setContent(
         `**Etihad Support Request**\n` +
           `Passenger: <@${user.id}>\n` +
-          `Status: ${supportStatusText(ticket)}\n\n` +
+          `Status: ${supportStatusText(ticket)}\n` +
+          `Ping: <@1499607934844403842>\n\n` +
           `**Message**\n${content}\n\n` +
           `Today at ${displayTime()}`
       )
