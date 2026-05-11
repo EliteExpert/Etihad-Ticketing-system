@@ -503,7 +503,7 @@ function buildFlightContainer(data, classNames, finished = false) {
         new ButtonBuilder()
           .setCustomId('finish_flight')
           .setLabel(finished ? 'Flight finished' : 'Finish flight')
-          .setStyle(ButtonStyle.Primary)
+          .setStyle(ButtonStyle.Secondary)
           .setDisabled(finished)
       )
     )
