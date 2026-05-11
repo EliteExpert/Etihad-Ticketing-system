@@ -32,6 +32,7 @@ const boardingPassApiUrl =
 const BUSINESS_ROLE_ID = '1499998210163478609';
 const FIRST_ROLE_ID = '1499998296209625258';
 const SUPPORT_REQUESTS_CHANNEL_ID = '1503282404146548878';
+const SUPPORT_REQUEST_IMAGE_URL = 'https://cdn.discordapp.com/attachments/1503377152421400697/1503377176525934764/image.png?ex=6a03209a&is=6a01cf1a&hm=f69fab374644cc9be8625555ab6e3c4ae39f8d789557e725ceeef5bfe408cc5e';
 const SUPPORT_COLORS = {
   unclaimed: 0x808080,
   inProgress: 0xffcc00,
@@ -232,7 +233,8 @@ function buildSupportRequestContainer(user, content, ticket) {
           `**Message**\n${content}\n\n` +
           `Today at ${displayTime()}`
       )
-    );
+    )
+    .addMediaGalleryComponents(new MediaGalleryBuilder().addItems({ media: { url: SUPPORT_REQUEST_IMAGE_URL } }));
 }
 
 function buildSupportConnectingContainer() {
