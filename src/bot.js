@@ -10,6 +10,7 @@ import {
   MediaGalleryBuilder,
   MessageFlags,
   ModalBuilder,
+  Partials,
   REST,
   Routes,
   SeparatorBuilder,
@@ -30,6 +31,7 @@ const boardingPassApiUrl =
 
 const BUSINESS_ROLE_ID = '1499998210163478609';
 const FIRST_ROLE_ID = '1499998296209625258';
+const SUPPORT_REQUESTS_CHANNEL_ID = '1503282404146548878';
 
 if (!token || !clientId || !guildId) {
   throw new Error('Missing DISCORD_TOKEN, DISCORD_CLIENT_ID, or DISCORD_GUILD_ID in environment.');
@@ -52,6 +54,8 @@ const rest = new REST({ version: '10' }).setToken(token);
 await rest.put(Routes.applicationGuildCommands(clientId, guildId), { body: commands });
 
 const sessions = new Map();
+const supportTicketsByUser = new Map();
+const supportTicketsByThread = new Map();
 
 function modal(customId, title, fields) {
   const m = new ModalBuilder().setCustomId(customId).setTitle(title);
@@ -92,7 +96,15 @@ const form3 = modal('form_3', 'Form 3', [
   { id: 'aircraft', label: 'Aircraft to be flown' }
 ]);
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.DirectMessages,
+    GatewayIntentBits.MessageContent
+  ],
+  partials: [Partials.Channel]
+});
 client.once(Events.ClientReady, c => console.log(`Logged in as ${c.user.tag}`));
 
 function classConfig(customIdOrClass) {
@@ -165,6 +177,104 @@ function removeBookingMention(classNames, userId) {
   for (const key of Object.keys(classNames)) {
     classNames[key] = classNames[key].filter(name => name !== mention);
   }
+}
+
+function messageTextWithAttachments(message) {
+  const parts = [];
+  if (message.content) parts.push(message.content);
+  for (const attachment of message.attachments.values()) {
+    parts.push(attachment.url);
+  }
+  return parts.join('\n') || '(No text content)';
+}
+
+function displayTime() {
+  return new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Dubai' });
+}
+
+function buildSupportRequestContainer(user, content, ticket, claimedBy = null) {
+  const container = new ContainerBuilder()
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        `**Etihad Support Request**\n` +
+          `Passenger: <@${user.id}>\n` +
+          `Status: ${claimedBy ? `Claimed by <@${claimedBy}>` : 'Waiting for staff'}\n\n` +
+          `**Message**\n${content}\n\n` +
+          `Today at ${displayTime()}`
+      )
+    );
+
+  if (!claimedBy) {
+    container.addActionRowComponents(row =>
+      row.addComponents(new ButtonBuilder().setCustomId(`support_claim:${user.id}`).setLabel('Claim').setStyle(ButtonStyle.Success))
+    );
+  }
+
+  return container;
+}
+
+function buildSupportConnectingContainer() {
+  return new ContainerBuilder().addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(
+      '**Etihad • Connecting You To An Agent**\n' +
+        'Hello, welcome to Etihad Customer Service Hub. We have received your message and are connecting you to an agent. Please stay with us so we can assist you quickly and efficiently.'
+    )
+  );
+}
+
+function buildSupportConnectedContainer(agent) {
+  return new ContainerBuilder().addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(
+      `Connected. ${agent} has been selected for your inquiry. Please be patient while they review your request.`
+    )
+  );
+}
+
+function buildRelayContainer(authorName, content) {
+  return new ContainerBuilder().addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(`**${authorName}**\n${content}\n\nToday at ${displayTime()}`)
+  );
+}
+
+async function createSupportRequest(message, content) {
+  const supportChannel = await client.channels.fetch(SUPPORT_REQUESTS_CHANNEL_ID);
+  if (!supportChannel?.isTextBased()) throw new Error('Support requests channel is not a text channel.');
+
+  const ticket = {
+    userId: message.author.id,
+    userTag: message.author.tag,
+    requestMessageId: null,
+    threadId: null,
+    claimedBy: null,
+    status: 'pending'
+  };
+
+  const requestMessage = await supportChannel.send({
+    components: [buildSupportRequestContainer(message.author, content, ticket)],
+    flags: MessageFlags.IsComponentsV2
+  });
+
+  ticket.requestMessageId = requestMessage.id;
+  supportTicketsByUser.set(message.author.id, ticket);
+
+  await message.reply({ components: [buildSupportConnectingContainer()], flags: MessageFlags.IsComponentsV2 });
+}
+
+async function forwardUserMessageToSupport(message, ticket, content) {
+  if (ticket.threadId) {
+    const thread = await client.channels.fetch(ticket.threadId);
+    if (!thread?.isTextBased()) throw new Error('Saved support thread is not a text channel.');
+    await thread.send({ components: [buildRelayContainer(message.author.tag, content)], flags: MessageFlags.IsComponentsV2 });
+    return;
+  }
+
+  const supportChannel = await client.channels.fetch(SUPPORT_REQUESTS_CHANNEL_ID);
+  if (!supportChannel?.isTextBased()) throw new Error('Support requests channel is not a text channel.');
+  await supportChannel.send({
+    components: [buildRelayContainer(`${message.author.tag} added a message`, content)],
+    flags: MessageFlags.IsComponentsV2
+  });
+  await message.reply('Your message has been added to your support request. Please wait while we connect you to an agent.');
 }
 
 function buildFlightContainer(data, classNames) {
@@ -256,8 +366,75 @@ async function generateBoardingPass(payload) {
   return result.image_url ?? result.output ?? result.download_url;
 }
 
+client.on(Events.MessageCreate, async message => {
+  try {
+    if (message.author.bot) return;
+
+    if (!message.guild) {
+      const content = messageTextWithAttachments(message);
+      const ticket = supportTicketsByUser.get(message.author.id);
+
+      if (!ticket) {
+        await createSupportRequest(message, content);
+        return;
+      }
+
+      await forwardUserMessageToSupport(message, ticket, content);
+      return;
+    }
+
+    const userId = supportTicketsByThread.get(message.channel.id);
+    if (!userId) return;
+
+    const user = await client.users.fetch(userId);
+    await user.send({
+      components: [buildRelayContainer(message.member?.displayName ?? message.author.username, messageTextWithAttachments(message))],
+      flags: MessageFlags.IsComponentsV2
+    });
+  } catch (error) {
+    console.error(error);
+  }
+});
+
 client.on(Events.InteractionCreate, async interaction => {
   try {
+    if (interaction.isButton() && interaction.customId.startsWith('support_claim:')) {
+      const userId = interaction.customId.split(':')[1];
+      const ticket = supportTicketsByUser.get(userId);
+
+      if (!ticket) {
+        await interaction.reply({ content: 'This support request could not be found.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      if (ticket.threadId) {
+        await interaction.reply({ content: `This support request is already claimed in <#${ticket.threadId}>.`, flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      const thread = await interaction.message.startThread({
+        name: `support-${ticket.userTag}`.replace(/[^a-z0-9-_]/gi, '-').slice(0, 90),
+        autoArchiveDuration: 1440
+      });
+
+      ticket.threadId = thread.id;
+      ticket.claimedBy = interaction.user.id;
+      ticket.status = 'claimed';
+      supportTicketsByThread.set(thread.id, userId);
+
+      const user = await client.users.fetch(userId);
+      await interaction.update({
+        components: [buildSupportRequestContainer(user, 'Support request claimed. Continue in the created thread.', ticket, interaction.user.id)],
+        flags: MessageFlags.IsComponentsV2
+      });
+      await thread.send({
+        components: [buildRelayContainer('Etihad Support', `Claimed by <@${interaction.user.id}>. Messages sent here will be relayed to ${user}.`)],
+        flags: MessageFlags.IsComponentsV2
+      });
+      await user.send({ components: [buildSupportConnectedContainer(interaction.user)], flags: MessageFlags.IsComponentsV2 });
+      return;
+    }
+
     if (interaction.isChatInputCommand() && interaction.commandName === 'create_flight') {
       sessions.set(interaction.user.id, {
         channelId: interaction.options.getChannel('channel', true).id,
