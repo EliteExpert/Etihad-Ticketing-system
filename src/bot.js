@@ -37,7 +37,7 @@ const SUPPORT_REQUESTS_CHANNEL_ID = '1503282404146548878';
 const SUPPORT_PING_ROLE_ID = '1499607934844403842';
 const FLIGHT_PING_ROLE_ID = '1503399633936715906';
 const FLIGHT_MANAGER_ROLE_ID = '1503457047545512147';
-const FLIGHT_COLOR = 0x808080;
+const FLIGHT_COLOR = 0xee9750;
 const MILES_EMOJI = '<:miles:1503446324471926824>';
 const ETIHAD_TAIL_EMOJI = '<:EtihadTail:1500012291188461660>';
 const MILES_DATA_DIR = new URL('../data/', import.meta.url);
@@ -329,10 +329,7 @@ function messageTextWithAttachments(message) {
 }
 
 function displayTime() {
-  const now = new Date();
-  const day = now.toLocaleDateString('en-GB', { weekday: 'long', timeZone: 'Asia/Dubai' });
-  const time = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Dubai' });
-  return `${day} at ${time}`;
+  return `<t:${Math.floor(Date.now() / 1000)}:f>`;
 }
 
 function supportStatusText(ticket) {
