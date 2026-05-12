@@ -329,7 +329,10 @@ function messageTextWithAttachments(message) {
 }
 
 function displayTime() {
-  return new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Dubai' });
+  const now = new Date();
+  const day = now.toLocaleDateString('en-GB', { weekday: 'long', timeZone: 'Asia/Dubai' });
+  const time = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Dubai' });
+  return `${day} at ${time}`;
 }
 
 function supportStatusText(ticket) {
@@ -365,7 +368,7 @@ function buildSupportRequestContainer(user, content, ticket) {
           `Status: ${supportStatusText(ticket)}\n` +
           `Ping: <@&${SUPPORT_PING_ROLE_ID}>\n\n` +
           `**Message**\n${content}\n\n` +
-          `Today at ${displayTime()}`
+          `${displayTime()}`
       )
     );
 }
@@ -403,7 +406,7 @@ function buildRelayContainer(authorName, content) {
   return new ContainerBuilder()
     .setAccentColor(SUPPORT_COLORS.relay)
     .addTextDisplayComponents(
-      new TextDisplayBuilder().setContent(`**${authorName}**\n${content}\n\nToday at ${displayTime()}`)
+      new TextDisplayBuilder().setContent(`**${authorName}**\n${content}\n\n${displayTime()}`)
     );
 }
 
