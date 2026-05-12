@@ -153,6 +153,7 @@ const form3 = modal('form_3', 'Form 3', [
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.DirectMessages,
     GatewayIntentBits.MessageContent
@@ -877,7 +878,9 @@ client.on(Events.InteractionCreate, async interaction => {
       if (interaction.customId === 'proceed_3') return void (await interaction.showModal(form3));
 
       if (interaction.customId === 'finish_flight') {
-        if (!hasFlightManagementAccess(interaction)) {
+        const isAdmin = interaction.memberPermissions?.has(PermissionFlagsBits.Administrator);
+        const hasRole = interaction.member?.roles?.cache?.has(FLIGHT_MANAGER_ROLE_ID);
+        if (!isAdmin && !hasRole) {
           await interaction.reply({ content: `You need <@&${FLIGHT_MANAGER_ROLE_ID}> or Administrator to finish flights.`, flags: MessageFlags.Ephemeral });
           return;
         }
