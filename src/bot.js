@@ -79,7 +79,6 @@ const commands = [
   new SlashCommandBuilder()
     .setName('create_flight')
     .setDescription('Run 3 forms in sequence, then post class buttons.')
-    .setDefaultMemberPermissions(0)
     .addChannelOption(option =>
       option
         .setName('channel')
@@ -877,14 +876,14 @@ client.on(Events.InteractionCreate, async interaction => {
       if (interaction.customId === 'proceed_3') return void (await interaction.showModal(form3));
 
       if (interaction.customId === 'finish_flight') {
-        if (!hasFlightManagementAccess(interaction)) {
-          await interaction.reply({ content: `You need <@&${FLIGHT_MANAGER_ROLE_ID}> or Administrator to finish flights.`, flags: MessageFlags.Ephemeral });
-          return;
-        }
-
         const s = sessions.get(interaction.message.id);
         if (!s?.flightData) {
           await interaction.reply({ content: 'No saved flight data found for this flight.', flags: MessageFlags.Ephemeral });
+          return;
+        }
+
+        if (!hasFlightManagementAccess(interaction)) {
+          await interaction.reply({ content: `You need <@&${FLIGHT_MANAGER_ROLE_ID}> or Administrator to finish flights.`, flags: MessageFlags.Ephemeral });
           return;
         }
 
