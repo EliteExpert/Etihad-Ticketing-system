@@ -787,7 +787,7 @@ client.on(Events.InteractionCreate, async interaction => {
 
     if (interaction.isChatInputCommand() && interaction.commandName === 'create_flight') {
       if (!hasFlightManagementAccess(interaction)) {
-        await interaction.reply({ content: `You need <@&${FLIGHT_MANAGER_ROLE_ID}> or Administrator to create flights.`, flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: `You need the <@&${FLIGHT_MANAGER_ROLE_ID}> role to create flights.`, flags: MessageFlags.Ephemeral });
         return;
       }
 
@@ -881,7 +881,7 @@ client.on(Events.InteractionCreate, async interaction => {
         }
 
         if (!hasFlightManagementAccess(interaction)) {
-          await interaction.reply({ content: `You need <@&${FLIGHT_MANAGER_ROLE_ID}> or Administrator to finish flights.`, flags: MessageFlags.Ephemeral });
+          await interaction.reply({ content: `You need the <@&${FLIGHT_MANAGER_ROLE_ID}> to finish flights.`, flags: MessageFlags.Ephemeral });
           return;
         }
 
