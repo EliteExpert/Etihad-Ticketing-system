@@ -881,7 +881,7 @@ client.on(Events.InteractionCreate, async interaction => {
         }
 
         if (!hasFlightManagementAccess(interaction)) {
-          await interaction.reply({ content: `You need the <@&${FLIGHT_MANAGER_ROLE_ID}> to finish flights.`, flags: MessageFlags.Ephemeral });
+          await interaction.reply({ content: `You need the <@&${FLIGHT_MANAGER_ROLE_ID}> role to finish flights.`, flags: MessageFlags.Ephemeral });
           return;
         }
 
