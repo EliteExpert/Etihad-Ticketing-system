@@ -249,9 +249,7 @@ function memberHasRole(member, roleId) {
 }
 
 function hasFlightManagementAccess(interaction) {
-  return Boolean(
-    interaction.memberPermissions?.has(PermissionFlagsBits.Administrator) || memberHasRole(interaction.member, FLIGHT_MANAGER_ROLE_ID)
-  );
+  return memberHasRole(interaction.member, FLIGHT_MANAGER_ROLE_ID);
 }
 
 function normalizeShopKey(value) {
