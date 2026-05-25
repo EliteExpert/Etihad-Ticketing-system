@@ -39,7 +39,7 @@ const FLIGHT_COLOR = 0xee9750;
 const MILES_EMOJI = '<:miles:1503446324471926824>';
 const ETIHAD_TAIL_EMOJI = '<:EtihadTail:1500012291188461660>';
 const FOOTER_IMAGE_URL =
-  'https://media.discordapp.net/attachments/1504449130603216906/1508543397902811216/Etihad_footer.png?ex=6a15ec05&is=6a149a85&hm=db634b54908af8480de3543e51247c9283b32a1d37ccc2fcaeeb91c7a04f3aab&=&format=webp&quality=lossless';
+  'https://media.discordapp.net/attachments/1504449130603216906/1508550151705198725/Flights_footer.png?ex=6a15f24f&is=6a14a0cf&hm=6976fd0a9189c17bf287fc7498870ce2c4846340f22800a3c6b89011bc713804&=&format=webp&quality=lossless';
 const MILES_DATA_DIR = new URL('../data/', import.meta.url);
 const MILES_DATA_FILE = new URL('../data/miles.json', import.meta.url);
 const SUPPORT_COLORS = {
