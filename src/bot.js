@@ -6,13 +6,13 @@ import {
   ButtonStyle,
   ChannelType,
   Client,
+  ContainerBuilder,
   Events,
   GatewayIntentBits,
   MediaGalleryBuilder,
   MessageFlags,
   ModalBuilder,
   Partials,
-  PermissionFlagsBits,
   REST,
   Routes,
   SeparatorBuilder,
@@ -20,16 +20,14 @@ import {
   SlashCommandBuilder,
   TextDisplayBuilder,
   TextInputBuilder,
-  TextInputStyle,
-  ContainerBuilder
+  TextInputStyle
 } from 'discord.js';
 
 const token = process.env.DISCORD_TOKEN;
 const clientId = process.env.DISCORD_CLIENT_ID;
 const guildId = process.env.DISCORD_GUILD_ID;
 const boardingPassApiUrl =
-  process.env.BOARDING_PASS_API_URL ??
-  'https://etihad-ticketing-system-backend.onrender.com/generate-boarding-pass';
+  process.env.BOARDING_PASS_API_URL ?? 'https://etihad-ticketing-system-backend.onrender.com/generate-boarding-pass';
 
 const BUSINESS_ROLE_ID = '1499998210163478609';
 const FIRST_ROLE_ID = '1499998296209625258';
@@ -40,6 +38,8 @@ const FLIGHT_MANAGER_ROLE_ID = '1503457047545512147';
 const FLIGHT_COLOR = 0xee9750;
 const MILES_EMOJI = '<:miles:1503446324471926824>';
 const ETIHAD_TAIL_EMOJI = '<:EtihadTail:1500012291188461660>';
+const FOOTER_IMAGE_URL =
+  'https://media.discordapp.net/attachments/1504449130603216906/1508543397902811216/Etihad_footer.png?ex=6a15ec05&is=6a149a85&hm=db634b54908af8480de3543e51247c9283b32a1d37ccc2fcaeeb91c7a04f3aab&=&format=webp&quality=lossless';
 const MILES_DATA_DIR = new URL('../data/', import.meta.url);
 const MILES_DATA_FILE = new URL('../data/miles.json', import.meta.url);
 const SUPPORT_COLORS = {
@@ -86,9 +86,7 @@ const commands = [
         .addChannelTypes(ChannelType.GuildText)
         .setRequired(true)
     ),
-  new SlashCommandBuilder()
-    .setName('flight_history')
-    .setDescription('View your attended flights and Etihad miles balance.'),
+  new SlashCommandBuilder().setName('flight_history').setDescription('View your attended flights and Etihad miles balance.'),
   new SlashCommandBuilder()
     .setName('miles_shop')
     .setDescription('View or buy rewards with your Etihad miles.')
@@ -97,9 +95,7 @@ const commands = [
         .setName('item')
         .setDescription('Reward to buy. Leave blank to view the shop.')
         .setRequired(false)
-        .addChoices(
-          ...Object.entries(SHOP_ITEMS).map(([value, item]) => ({ name: `${item.label} - ${item.price} miles`, value }))
-        )
+        .addChoices(...Object.entries(SHOP_ITEMS).map(([value, item]) => ({ name: `${item.label} - ${item.price} miles`, value })))
     )
 ].map(command => command.toJSON());
 
@@ -109,6 +105,18 @@ await rest.put(Routes.applicationGuildCommands(clientId, guildId), { body: comma
 const sessions = new Map();
 const supportTicketsByUser = new Map();
 const supportTicketsByThread = new Map();
+
+function text(content) {
+  return new TextDisplayBuilder().setContent(content);
+}
+
+function media(url) {
+  return new MediaGalleryBuilder().addItems({ media: { url } });
+}
+
+function footerMedia() {
+  return media(FOOTER_IMAGE_URL);
+}
 
 function modal(customId, title, fields) {
   const m = new ModalBuilder().setCustomId(customId).setTitle(title);
@@ -134,7 +142,6 @@ const form1 = modal('form_1', 'Form 1', [
   { id: 'iata1', label: 'Enter departure airport IATA code' },
   { id: 'iata2', label: 'Enter arrival airport IATA code' }
 ]);
-
 const form2 = modal('form_2', 'Form 2', [
   { id: 'date', label: 'Enter the date of the flight' },
   { id: 'timestamp1', label: 'Enter the server opening time in GMT' },
@@ -142,7 +149,6 @@ const form2 = modal('form_2', 'Form 2', [
   { id: 'timestamp2', label: 'Enter the Departure time in GMT' },
   { id: 'closing_time', label: 'Enter Gate closing time in GMT' }
 ]);
-
 const form3 = modal('form_3', 'Form 3', [
   { id: 'link', label: 'Discord event link' },
   { id: 'banner', label: 'Flight banner link' },
@@ -150,12 +156,7 @@ const form3 = modal('form_3', 'Form 3', [
 ]);
 
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.DirectMessages,
-    GatewayIntentBits.MessageContent
-  ],
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.DirectMessages, GatewayIntentBits.MessageContent],
   partials: [Partials.Channel]
 });
 client.once(Events.ClientReady, c => console.log(`Logged in as ${c.user.tag}`));
@@ -219,7 +220,6 @@ function formatPassengerList(classNames) {
   const booked = Object.entries(classNames)
     .filter(([, names]) => names.length > 0)
     .map(([key, names]) => `- ${labels[key]}: ${names.join(' ')}`);
-
   return booked.length ? booked.join('\n') : 'No passengers booked yet.';
 }
 
@@ -357,7 +357,7 @@ function buildSupportRequestContainer(user, content, ticket) {
   return new ContainerBuilder()
     .setAccentColor(supportColor(ticket))
     .addTextDisplayComponents(
-      new TextDisplayBuilder().setContent(
+      text(
         `**Etihad Support Request**\n` +
           `Passenger: <@${user.id}>\n` +
           `Status: ${supportStatusText(ticket)}\n` +
@@ -372,7 +372,7 @@ function buildSupportConnectingContainer() {
   return new ContainerBuilder()
     .setAccentColor(SUPPORT_COLORS.inProgress)
     .addTextDisplayComponents(
-      new TextDisplayBuilder().setContent(
+      text(
         '**Etihad • Connecting You To An Agent**\n' +
           'Hello, welcome to Etihad Customer Service Hub. We have received your message and are connecting you to an agent. Please stay with us so we can assist you quickly and efficiently.'
       )
@@ -382,27 +382,19 @@ function buildSupportConnectingContainer() {
 function buildSupportConnectedContainer(agent) {
   return new ContainerBuilder()
     .setAccentColor(SUPPORT_COLORS.inProgress)
-    .addTextDisplayComponents(
-      new TextDisplayBuilder().setContent(
-        `Connected. ${agent} has been selected for your inquiry. Please be patient while they review your request.`
-      )
-    );
+    .addTextDisplayComponents(text(`Connected. ${agent} has been selected for your inquiry. Please be patient while they review your request.`));
 }
 
 function buildSupportClosedContainer() {
   return new ContainerBuilder()
     .setAccentColor(SUPPORT_COLORS.closed)
-    .addTextDisplayComponents(
-      new TextDisplayBuilder().setContent('Your Etihad support request has been closed. Thank you for contacting us.')
-    );
+    .addTextDisplayComponents(text('Your Etihad support request has been closed. Thank you for contacting us.'));
 }
 
 function buildRelayContainer(authorName, content) {
   return new ContainerBuilder()
     .setAccentColor(SUPPORT_COLORS.relay)
-    .addTextDisplayComponents(
-      new TextDisplayBuilder().setContent(`**${authorName}**\n${content}\n\n${displayTime()}`)
-    );
+    .addTextDisplayComponents(text(`**${authorName}**\n${content}\n\n${displayTime()}`));
 }
 
 async function updateSupportRequestMessage(ticket, content) {
@@ -437,7 +429,6 @@ async function createSupportRequest(message, content) {
 
   ticket.requestMessageId = requestMessage.id;
   supportTicketsByUser.set(message.author.id, ticket);
-
   await message.reply({ components: [buildSupportConnectingContainer()], flags: MessageFlags.IsComponentsV2 });
 }
 
@@ -457,10 +448,7 @@ async function forwardUserMessageToSupport(message, ticket, content) {
 
   const supportChannel = await client.channels.fetch(SUPPORT_REQUESTS_CHANNEL_ID);
   if (!supportChannel?.isTextBased()) throw new Error('Support requests channel is not a text channel.');
-  await supportChannel.send({
-    components: [buildRelayContainer(`${message.author.tag} added a message`, content)],
-    flags: MessageFlags.IsComponentsV2
-  });
+  await supportChannel.send({ components: [buildRelayContainer(`${message.author.tag} added a message`, content)], flags: MessageFlags.IsComponentsV2 });
   await message.reply('Your message has been added to your support request. Please wait while we connect you to an agent.');
 }
 
@@ -470,13 +458,13 @@ function buildFlightContainer(data, classNames, finished = false) {
   const statusText = finished ? '\n\n**Flight finished**' : '';
 
   if (/^https?:\/\//i.test(bannerUrl)) {
-    container.addMediaGalleryComponents(new MediaGalleryBuilder().addItems({ media: { url: bannerUrl } }));
+    container.addMediaGalleryComponents(media(bannerUrl));
   }
 
   return container
     .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small))
     .addTextDisplayComponents(
-      new TextDisplayBuilder().setContent(
+      text(
         `> An Etihad flight has been dispatched from **${data['flight-details.departure-airport']}** to **${data['flight-details.arrival-airport']}**.\n` +
           `\n` +
           `<@&${FLIGHT_PING_ROLE_ID}>\n` +
@@ -506,11 +494,7 @@ function buildFlightContainer(data, classNames, finished = false) {
       )
     )
     .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small))
-    .addMediaGalleryComponents(
-      new MediaGalleryBuilder().addItems({
-        media: { url: 'https://media.discordapp.net/attachments/1499601098749640764/1501170510128742601/image.png?ex=69fb197c&is=69f9c7fc&hm=f0af26ca3914218b03efff8aef60a58b573b50e65b5cebb51a85a6efed9fd628&=&format=webp&quality=lossless&width=1299&height=101' }
-      })
-    );
+    .addMediaGalleryComponents(footerMedia());
 }
 
 async function editFlightMessage(session, sourceMessage = null) {
@@ -528,7 +512,6 @@ async function editFlightMessage(session, sourceMessage = null) {
 
 function buildBoardingPassPayload(session, cls, passengerName) {
   const data = session.flightData;
-
   return {
     class: cls.classType,
     passenger_name: passengerName,
@@ -592,21 +575,14 @@ function buildHistoryContainer(user, milesUser) {
   const flights = milesUser.flights.slice(-10).reverse();
   const history = flights.length
     ? flights
-        .map(
-          flight =>
-            `- **${flight.flight}**: ${flight.departureAirport} to ${flight.arrivalAirport} | ${flight.className} | ${MILES_EMOJI} +${flight.miles} miles`
-        )
+        .map(flight => `- **${flight.flight}**: ${flight.departureAirport} to ${flight.arrivalAirport} | ${flight.className} | ${MILES_EMOJI} +${flight.miles} miles`)
         .join('\n')
     : 'No attended flights yet.';
 
   return new ContainerBuilder()
     .setAccentColor(FLIGHT_COLOR)
     .addTextDisplayComponents(
-      new TextDisplayBuilder().setContent(
-        `${ETIHAD_TAIL_EMOJI} **${user.username}'s Flight History**\n` +
-          `Total balance: ${MILES_EMOJI} **${milesUser.balance} miles**\n\n` +
-          `${history}`
-      )
+      text(`${ETIHAD_TAIL_EMOJI} **${user.username}'s Flight History**\n` + `Total balance: ${MILES_EMOJI} **${milesUser.balance} miles**\n\n` + `${history}`)
     );
 }
 
@@ -621,7 +597,7 @@ function buildShopContainer(user, milesUser, purchaseText = null) {
   return new ContainerBuilder()
     .setAccentColor(FLIGHT_COLOR)
     .addTextDisplayComponents(
-      new TextDisplayBuilder().setContent(
+      text(
         `**Etihad Miles Shop**\n` +
           `Passenger: ${user}\n` +
           `Balance: ${MILES_EMOJI} **${milesUser.balance} miles**\n\n` +
@@ -638,12 +614,10 @@ client.on(Events.MessageCreate, async message => {
     if (!message.guild) {
       const content = messageTextWithAttachments(message);
       const ticket = supportTicketsByUser.get(message.author.id);
-
       if (!ticket) {
         await createSupportRequest(message, content);
         return;
       }
-
       await forwardUserMessageToSupport(message, ticket, content);
       return;
     }
@@ -669,7 +643,6 @@ client.on(Events.InteractionCreate, async interaction => {
     if (interaction.isButton() && interaction.customId.startsWith('support_close_confirm:')) {
       const userId = interaction.customId.split(':')[1];
       const ticket = supportTicketsByUser.get(userId);
-
       if (!ticket) {
         await interaction.update({ content: 'This support request could not be found.', components: [] });
         return;
@@ -681,7 +654,6 @@ client.on(Events.InteractionCreate, async interaction => {
       if (ticket.threadId) supportTicketsByThread.delete(ticket.threadId);
 
       await updateSupportRequestMessage(ticket, 'Support request closed.');
-
       const user = await client.users.fetch(userId);
       await user.send({ components: [buildSupportClosedContainer()], flags: MessageFlags.IsComponentsV2 }).catch(() => null);
 
@@ -720,12 +692,10 @@ client.on(Events.InteractionCreate, async interaction => {
     if (interaction.isButton() && interaction.customId.startsWith('support_claim:')) {
       const userId = interaction.customId.split(':')[1];
       const ticket = supportTicketsByUser.get(userId);
-
       if (!ticket) {
         await interaction.reply({ content: 'This support request could not be found.', flags: MessageFlags.Ephemeral });
         return;
       }
-
       if (ticket.threadId) {
         await interaction.reply({ content: `This support request is already claimed in <#${ticket.threadId}>.`, flags: MessageFlags.Ephemeral });
         return;
@@ -746,10 +716,7 @@ client.on(Events.InteractionCreate, async interaction => {
         components: [buildSupportRequestContainer(user, 'Support request claimed. Continue in the created thread.', ticket), ...buildSupportActions(userId, ticket)],
         flags: MessageFlags.IsComponentsV2
       });
-      await thread.send({
-        components: [buildRelayContainer('Etihad Support', `Claimed by <@${interaction.user.id}>. Messages sent here will be relayed to ${user}.`)],
-        flags: MessageFlags.IsComponentsV2
-      });
+      await thread.send({ components: [buildRelayContainer('Etihad Support', `Claimed by <@${interaction.user.id}>. Messages sent here will be relayed to ${user}.`)], flags: MessageFlags.IsComponentsV2 });
       await user.send({ components: [buildSupportConnectedContainer(interaction.user)], flags: MessageFlags.IsComponentsV2 });
       return;
     }
@@ -879,12 +846,10 @@ client.on(Events.InteractionCreate, async interaction => {
           await interaction.reply({ content: 'No saved flight data found for this flight.', flags: MessageFlags.Ephemeral });
           return;
         }
-
         if (!hasFlightManagementAccess(interaction)) {
           await interaction.reply({ content: `You need the <@&${FLIGHT_MANAGER_ROLE_ID}> role to finish flights.`, flags: MessageFlags.Ephemeral });
           return;
         }
-
         if (s.finished) {
           await interaction.reply({ content: 'This flight has already been finished.', flags: MessageFlags.Ephemeral });
           return;
@@ -893,11 +858,7 @@ client.on(Events.InteractionCreate, async interaction => {
         const awards = await finishFlight(s);
         await editFlightMessage(s, interaction.message);
         await interaction.reply({
-          components: [
-            new ContainerBuilder()
-              .setAccentColor(FLIGHT_COLOR)
-              .addTextDisplayComponents(new TextDisplayBuilder().setContent(`**Flight finished**\n${formatMilesAwards(awards)}`))
-          ],
+          components: [new ContainerBuilder().setAccentColor(FLIGHT_COLOR).addTextDisplayComponents(text(`**Flight finished**\n${formatMilesAwards(awards)}`))],
           flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2
         });
         return;
@@ -909,7 +870,6 @@ client.on(Events.InteractionCreate, async interaction => {
           await interaction.reply({ content: 'No saved flight data found. Please run /create_flight again.', flags: MessageFlags.Ephemeral });
           return;
         }
-
         if (s.finished) {
           await interaction.reply({ content: 'This flight has already finished.', flags: MessageFlags.Ephemeral });
           return;
@@ -917,27 +877,19 @@ client.on(Events.InteractionCreate, async interaction => {
 
         const cls = classConfig(interaction.customId);
         const member = interaction.member;
-        if (cls.roleId) {
-          const hasRole = member?.roles?.cache?.has?.(cls.roleId);
-          if (!hasRole) {
-            await interaction.reply({ content: `You need the required role for ${cls.name}.`, flags: MessageFlags.Ephemeral });
-            return;
-          }
+        if (cls.roleId && !member?.roles?.cache?.has?.(cls.roleId)) {
+          await interaction.reply({ content: `You need the required role for ${cls.name}.`, flags: MessageFlags.Ephemeral });
+          return;
         }
 
         const passengerName = interaction.member?.displayName ?? interaction.user.username;
         addBookingMention(s.classNames, cls, interaction.user.id);
         s.bookings[interaction.user.id] = { classType: cls.classType, passengerName };
-
         await editFlightMessage(s, interaction.message);
 
         const bookingContainer = new ContainerBuilder()
           .setAccentColor(FLIGHT_COLOR)
-          .addTextDisplayComponents(
-            new TextDisplayBuilder().setContent(
-              `# ${cls.name} booking\nPassenger: **${passengerName}**\nSaved as: \`${cls.varKey}\`\nUse the buttons below to continue.`
-            )
-          )
+          .addTextDisplayComponents(text(`# ${cls.name} booking\nPassenger: **${passengerName}**\nSaved as: \`${cls.varKey}\`\nUse the buttons below to continue.`))
           .addActionRowComponents(row =>
             row.addComponents(
               new ButtonBuilder().setLabel('Flight event link').setStyle(ButtonStyle.Link).setURL(s.eventLink),
@@ -946,11 +898,7 @@ client.on(Events.InteractionCreate, async interaction => {
             )
           )
           .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small))
-          .addMediaGalleryComponents(
-            new MediaGalleryBuilder().addItems({
-              media: { url: 'https://media.discordapp.net/attachments/1499601098749640764/1501170510128742601/image.png?ex=69fb197c&is=69f9c7fc&hm=f0af26ca3914218b03efff8aef60a58b573b50e65b5cebb51a85a6efed9fd628&=&format=webp&quality=lossless&width=1299&height=101' }
-            })
-          );
+          .addMediaGalleryComponents(footerMedia());
 
         await interaction.reply({ components: [bookingContainer], flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2 });
         return;
@@ -960,12 +908,10 @@ client.on(Events.InteractionCreate, async interaction => {
         const [, savedMessageId] = interaction.customId.split(':');
         const messageId = savedMessageId ?? interaction.message.id;
         const s = sessions.get(messageId);
-
         if (!s?.flightData) {
           await interaction.reply({ content: 'No saved flight data found. Please book again from the flight message.', flags: MessageFlags.Ephemeral });
           return;
         }
-
         if (s.finished) {
           await interaction.reply({ content: 'This flight has already finished.', flags: MessageFlags.Ephemeral });
           return;
@@ -974,7 +920,6 @@ client.on(Events.InteractionCreate, async interaction => {
         removeBookingMention(s.classNames, interaction.user.id);
         delete s.bookings[interaction.user.id];
         await editFlightMessage(s, interaction.message);
-
         await interaction.reply({ content: 'You have been removed from the passenger list.', flags: MessageFlags.Ephemeral });
         return;
       }
@@ -982,7 +927,6 @@ client.on(Events.InteractionCreate, async interaction => {
       if (interaction.customId.startsWith('get_itinerary:')) {
         const [, messageId] = interaction.customId.split(':');
         const s = sessions.get(messageId);
-
         if (!s?.flightData) {
           await interaction.reply({ content: 'No saved flight data found. Please book again from the flight message.', flags: MessageFlags.Ephemeral });
           return;
@@ -995,20 +939,13 @@ client.on(Events.InteractionCreate, async interaction => {
         }
 
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-
         const cls = classConfig(booking.classType);
-        const payload = buildBoardingPassPayload(s, cls, booking.passengerName);
-        const imageUrl = await generateBoardingPass(payload);
-
+        const imageUrl = await generateBoardingPass(buildBoardingPassPayload(s, cls, booking.passengerName));
         const itineraryContainer = new ContainerBuilder().setAccentColor(FLIGHT_COLOR);
         if (imageUrl) {
-          itineraryContainer
-            .addTextDisplayComponents(new TextDisplayBuilder().setContent('Your boarding pass is ready:'))
-            .addMediaGalleryComponents(new MediaGalleryBuilder().addItems({ media: { url: imageUrl } }));
+          itineraryContainer.addTextDisplayComponents(text('Your boarding pass is ready:')).addMediaGalleryComponents(media(imageUrl));
         } else {
-          itineraryContainer.addTextDisplayComponents(
-            new TextDisplayBuilder().setContent('Your boarding pass was generated, but no image URL was returned.')
-          );
+          itineraryContainer.addTextDisplayComponents(text('Your boarding pass was generated, but no image URL was returned.'));
         }
 
         await interaction.editReply({ components: [itineraryContainer], flags: MessageFlags.IsComponentsV2 });
