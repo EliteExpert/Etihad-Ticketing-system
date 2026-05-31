@@ -201,6 +201,28 @@ function activeShopCooldown(milesUser, itemKey) {
   return expiresAt > Date.now() ? expiresAt : null;
 }
 
+function buyShopItem(milesUser, selectedItem) {
+  const [selectedKey, item] = resolveShopItem(selectedItem);
+  const cooldown = selectedKey ? activeShopCooldown(milesUser, selectedKey) : null;
+
+  if (!item) {
+    return { ok: false, text: 'That shop item could not be found.' };
+  }
+
+  if (cooldown) {
+    return { ok: false, text: `**${item.label}** is on cooldown until ${formatRelativeTime(cooldown)}.` };
+  }
+
+  if (milesUser.balance < item.price) {
+    return { ok: false, text: `You need ${MILES_EMOJI} ${item.price - milesUser.balance} more miles to buy **${item.label}**.` };
+  }
+
+  milesUser.balance -= item.price;
+  milesUser.shopCooldowns[selectedKey] = Date.now() + SHOP_COOLDOWN_MS;
+  milesUser.purchases.push({ key: selectedKey, label: item.label, price: item.price, boughtAt: new Date().toISOString() });
+  return { ok: true, text: `Purchased **${item.label}** for ${MILES_EMOJI} ${item.price} miles.` };
+}
+
 function currentGuestTierKey(milesUser) {
   return milesUser.guest?.tier ?? null;
 }
@@ -666,6 +688,27 @@ function buildShopContainer(user, milesUser, purchaseText = null) {
     );
 }
 
+function buildShopComponents(user, milesUser, purchaseText = null) {
+  const options = Object.entries(SHOP_ITEMS).map(([key, item]) => {
+    const cooldown = activeShopCooldown(milesUser, key);
+    return {
+      label: item.label,
+      value: key,
+      description: cooldown ? `Available ${formatRelativeTime(cooldown)}` : `${item.price} miles`
+    };
+  });
+
+  return [
+    buildShopContainer(user, milesUser, purchaseText),
+    new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId(`shop_buy_select:${user.id}`)
+        .setPlaceholder('Select an item to buy')
+        .addOptions(options)
+    )
+  ];
+}
+
 client.on(Events.MessageCreate, async message => {
   try {
     if (message.author.bot) return;
@@ -801,9 +844,25 @@ client.on(Events.InteractionCreate, async interaction => {
       }
 
       if (action === 'profile_shop') {
-        await interaction.reply({ components: [buildShopContainer(interaction.user, milesUser)], flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2 });
+        await interaction.reply({ components: buildShopComponents(interaction.user, milesUser), flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2 });
         return;
       }
+    }
+
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('shop_buy_select:')) {
+      const shopUserId = interaction.customId.split(':')[1];
+      if (shopUserId !== interaction.user.id) {
+        await interaction.reply({ content: 'Only the shop owner can use this menu.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      const store = await loadMilesStore();
+      const milesUser = ensureMilesUser(store, interaction.user.id);
+      const purchase = buyShopItem(milesUser, interaction.values[0]);
+      if (purchase.ok) await saveMilesStore(store);
+
+      await interaction.update({ components: buildShopComponents(interaction.user, milesUser, purchase.text), flags: MessageFlags.IsComponentsV2 });
+      return;
     }
 
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith('guest_upgrade_select:')) {
@@ -1018,24 +1077,12 @@ client.on(Events.InteractionCreate, async interaction => {
       let purchaseText = null;
 
       if (selectedItem) {
-        const [selectedKey, item] = resolveShopItem(selectedItem);
-        const cooldown = selectedKey ? activeShopCooldown(milesUser, selectedKey) : null;
-        if (!item) {
-          purchaseText = 'That shop item could not be found.';
-        } else if (cooldown) {
-          purchaseText = `**${item.label}** is on cooldown until ${formatRelativeTime(cooldown)}.`;
-        } else if (milesUser.balance < item.price) {
-          purchaseText = `You need ${MILES_EMOJI} ${item.price - milesUser.balance} more miles to buy **${item.label}**.`;
-        } else {
-          milesUser.balance -= item.price;
-          milesUser.shopCooldowns[selectedKey] = Date.now() + SHOP_COOLDOWN_MS;
-          milesUser.purchases.push({ key: selectedKey, label: item.label, price: item.price, boughtAt: new Date().toISOString() });
-          await saveMilesStore(store);
-          purchaseText = `Purchased **${item.label}** for ${MILES_EMOJI} ${item.price} miles.`;
-        }
+        const purchase = buyShopItem(milesUser, selectedItem);
+        if (purchase.ok) await saveMilesStore(store);
+        purchaseText = purchase.text;
       }
 
-      await interaction.reply({ components: [buildShopContainer(interaction.user, milesUser, purchaseText)], flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2 });
+      await interaction.reply({ components: buildShopComponents(interaction.user, milesUser, purchaseText), flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2 });
       return;
     }
 
