@@ -10,6 +10,7 @@ import {
   GatewayIntentBits,
   MessageFlags,
   Partials,
+  PermissionFlagsBits,
   REST,
   Routes,
   SeparatorBuilder,
@@ -169,6 +170,10 @@ function hasFlightManagementAccess(interaction) {
   return memberHasRole(interaction.member, FLIGHT_MANAGER_ROLE_ID);
 }
 
+function hasAdminAccess(interaction) {
+  return Boolean(interaction.memberPermissions?.has(PermissionFlagsBits.Administrator));
+}
+
 function normalizeShopKey(value) {
   return value
     .toLowerCase()
@@ -208,11 +213,29 @@ function formatTierBenefits(tier) {
   return tier.benefits.map(benefit => `- ${benefit}`).join('\n');
 }
 
-async function syncGuestTierRole(interaction, tierKey) {
+function formatGuestSummary(user, milesUser) {
+  const tierKey = currentGuestTierKey(milesUser);
+  const tier = tierKey ? GUEST_TIERS[tierKey] : null;
+  const cooldowns = Object.entries(milesUser.shopCooldowns ?? {})
+    .filter(([, expiresAt]) => expiresAt > Date.now())
+    .map(([key, expiresAt]) => `- ${SHOP_ITEMS[key]?.label ?? key}: ${formatRelativeTime(expiresAt)}`)
+    .join('\n');
+
+  return (
+    `Passenger: ${user}\n` +
+    `Tier: **${tier?.label ?? 'No account'}**${tier ? ` <@&${tier.roleId}>` : ''}\n` +
+    `Balance: ${MILES_EMOJI} **${milesUser.balance} miles**\n` +
+    `Flights attended: **${milesUser.flights.length}**\n` +
+    `Purchases: **${milesUser.purchases.length}**\n` +
+    `Active cooldowns:\n${cooldowns || 'None'}`
+  );
+}
+
+async function syncGuestTierRole(interaction, tierKey, userId = interaction.user.id) {
   const guild = interaction.guild;
   if (!guild) return { ok: false, reason: 'This can only be used inside the server.' };
 
-  const member = await guild.members.fetch(interaction.user.id).catch(() => null);
+  const member = await guild.members.fetch(userId).catch(() => null);
   if (!member?.roles?.cache) return { ok: false, reason: 'I could not fetch your server member profile.' };
 
   const tierRoleIds = Object.values(GUEST_TIERS).map(tier => tier.roleId);
@@ -229,6 +252,24 @@ async function syncGuestTierRole(interaction, tierKey) {
     return {
       ok: false,
       reason: `I could not assign <@&${targetRoleId}>. Please check my Manage Roles permission and role position.`
+    };
+  }
+}
+
+async function removeGuestTierRoles(interaction, userId) {
+  const guild = interaction.guild;
+  if (!guild) return { ok: false, reason: 'This can only be used inside the server.' };
+
+  const member = await guild.members.fetch(userId).catch(() => null);
+  if (!member?.roles?.cache) return { ok: false, reason: 'I could not fetch that server member profile.' };
+
+  try {
+    await member.roles.remove(Object.values(GUEST_TIERS).map(tier => tier.roleId), 'Etihad Guest account revoked');
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      reason: 'I could not remove all tier roles. Please check my Manage Roles permission and role position.'
     };
   }
 }
@@ -798,6 +839,139 @@ client.on(Events.InteractionCreate, async interaction => {
       }
 
       await interaction.update({ components: buildTierUpgradeComponents(interaction.user, milesUser, notice), flags: MessageFlags.IsComponentsV2 });
+      return;
+    }
+
+    if (interaction.isChatInputCommand() && interaction.commandName === 'admin') {
+      if (!hasAdminAccess(interaction)) {
+        await interaction.reply({ content: 'Administrator permission is required for this command.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      const subcommand = interaction.options.getSubcommand();
+      const targetUser = interaction.options.getUser('user', true);
+      const store = await loadMilesStore();
+      const milesUser = ensureMilesUser(store, targetUser.id);
+      let response = null;
+
+      if (subcommand === 'user_info') {
+        response = formatGuestSummary(targetUser, milesUser);
+      }
+
+      if (subcommand === 'add_miles' || subcommand === 'remove_miles') {
+        const amount = interaction.options.getInteger('amount', true);
+        const reason = interaction.options.getString('reason') ?? 'No reason provided';
+        const delta = subcommand === 'add_miles' ? amount : -amount;
+        milesUser.balance = Math.max(0, milesUser.balance + delta);
+        milesUser.adjustments ??= [];
+        milesUser.adjustments.push({
+          adminId: interaction.user.id,
+          amount: delta,
+          reason,
+          createdAt: new Date().toISOString()
+        });
+        await saveMilesStore(store);
+        response = `${targetUser} now has ${MILES_EMOJI} **${milesUser.balance} miles**.\nAdjustment: **${delta > 0 ? '+' : ''}${delta}**\nReason: ${reason}`;
+      }
+
+      if (subcommand === 'set_tier') {
+        const tierKey = interaction.options.getString('tier', true);
+        const roleSync = await syncGuestTierRole(interaction, tierKey, targetUser.id);
+        if (!roleSync.ok) {
+          response = roleSync.reason;
+        } else {
+          milesUser.guest ??= { createdAt: new Date().toISOString() };
+          milesUser.guest = { ...milesUser.guest, tier: tierKey, upgradedAt: new Date().toISOString() };
+          await saveMilesStore(store);
+          response = `${targetUser} has been set to **${GUEST_TIERS[tierKey].label}** <@&${GUEST_TIERS[tierKey].roleId}>.`;
+        }
+      }
+
+      if (subcommand === 'sync_tier_role') {
+        const tierKey = currentGuestTierKey(milesUser);
+        if (!tierKey) {
+          response = `${targetUser} does not have an Etihad Guest account yet.`;
+        } else {
+          const roleSync = await syncGuestTierRole(interaction, tierKey, targetUser.id);
+          response = roleSync.ok ? `Synced ${targetUser}'s **${GUEST_TIERS[tierKey].label}** role.` : roleSync.reason;
+        }
+      }
+
+      if (subcommand === 'reset_shop_cooldown') {
+        const itemKey = interaction.options.getString('item');
+        if (itemKey) {
+          delete milesUser.shopCooldowns[itemKey];
+          response = `Reset ${SHOP_ITEMS[itemKey].label} cooldown for ${targetUser}.`;
+        } else {
+          milesUser.shopCooldowns = {};
+          response = `Reset all shop cooldowns for ${targetUser}.`;
+        }
+        await saveMilesStore(store);
+      }
+
+      if (subcommand === 'close_support') {
+        const ticket = supportTicketsByUser.get(targetUser.id);
+        if (!ticket || ticket.status === 'closed') {
+          response = `${targetUser} does not have an open support ticket.`;
+        } else {
+          ticket.status = 'closed';
+          ticket.closedBy = interaction.user.id;
+          supportTicketsByUser.delete(targetUser.id);
+          if (ticket.threadId) supportTicketsByThread.delete(ticket.threadId);
+          await updateSupportRequestMessage(ticket, 'Support request force closed by an administrator.').catch(() => null);
+          const user = await client.users.fetch(targetUser.id).catch(() => null);
+          await user?.send({ components: [buildSupportClosedContainer()], flags: MessageFlags.IsComponentsV2 }).catch(() => null);
+          response = `Closed the open support ticket for ${targetUser}.`;
+        }
+      }
+
+      await interaction.reply({
+        components: [new ContainerBuilder().setAccentColor(FLIGHT_COLOR).addTextDisplayComponents(text(`**Admin**\n${response}`))],
+        flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2
+      });
+      return;
+    }
+
+    if (interaction.isChatInputCommand() && interaction.commandName === 'security') {
+      if (!hasAdminAccess(interaction)) {
+        await interaction.reply({ content: 'Administrator permission is required for this command.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      const subcommand = interaction.options.getSubcommand();
+      const targetUser = interaction.options.getUser('user', true);
+      const store = await loadMilesStore();
+      const milesUser = ensureMilesUser(store, targetUser.id);
+      let response = null;
+
+      if (subcommand === 'audit') {
+        const member = await interaction.guild?.members.fetch(targetUser.id).catch(() => null);
+        const tierRoles = Object.values(GUEST_TIERS)
+          .filter(tier => member?.roles?.cache?.has(tier.roleId))
+          .map(tier => `${tier.label} <@&${tier.roleId}>`)
+          .join('\n');
+        const ticket = supportTicketsByUser.get(targetUser.id);
+
+        response =
+          `${formatGuestSummary(targetUser, milesUser)}\n\n` +
+          `Tier roles on member:\n${tierRoles || 'None'}\n\n` +
+          `Support ticket: **${ticket ? supportStatusText(ticket) : 'None'}**`;
+      }
+
+      if (subcommand === 'revoke_guest') {
+        const roleRemoval = await removeGuestTierRoles(interaction, targetUser.id);
+        milesUser.guest = null;
+        milesUser.shopCooldowns = {};
+        await saveMilesStore(store);
+        response = roleRemoval.ok
+          ? `Revoked ${targetUser}'s Etihad Guest account and removed tier roles.`
+          : `Revoked ${targetUser}'s stored Etihad Guest account.\n${roleRemoval.reason}`;
+      }
+
+      await interaction.reply({
+        components: [new ContainerBuilder().setAccentColor(FLIGHT_COLOR).addTextDisplayComponents(text(`**Security**\n${response}`))],
+        flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2
+      });
       return;
     }
 
