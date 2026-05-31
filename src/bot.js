@@ -5,6 +5,7 @@ import {
   ButtonStyle,
   Client,
   ContainerBuilder,
+  EmbedBuilder,
   Events,
   GatewayIntentBits,
   MessageFlags,
@@ -12,7 +13,8 @@ import {
   REST,
   Routes,
   SeparatorBuilder,
-  SeparatorSpacingSize
+  SeparatorSpacingSize,
+  StringSelectMenuBuilder
 } from 'discord.js';
 import {
   boardingPassApiUrl,
@@ -208,11 +210,13 @@ function formatTierBenefits(tier) {
 
 async function syncGuestTierRole(interaction, tierKey) {
   const member = await interaction.guild?.members.fetch(interaction.user.id).catch(() => null);
-  if (!member?.roles?.cache) return;
+  if (!member?.roles?.cache) return false;
 
   const tierRoleIds = Object.values(GUEST_TIERS).map(tier => tier.roleId);
-  await member.roles.remove(tierRoleIds.filter(roleId => roleId !== GUEST_TIERS[tierKey].roleId)).catch(() => null);
-  await member.roles.add(GUEST_TIERS[tierKey].roleId).catch(() => null);
+  const targetRoleId = GUEST_TIERS[tierKey].roleId;
+  await member.roles.remove(tierRoleIds.filter(roleId => roleId !== targetRoleId)).catch(() => null);
+  await member.roles.add(targetRoleId);
+  return true;
 }
 
 function randomInt(min, max) {
@@ -533,6 +537,55 @@ function buildGuestContainer(user, milesUser, notice = null) {
     );
 }
 
+function buildProfileEmbed(user, milesUser) {
+  const tierKey = currentGuestTierKey(milesUser);
+  const tier = tierKey ? GUEST_TIERS[tierKey] : null;
+  const benefits = tier ? formatTierBenefits(tier) : 'Create a free Bronze account with `/etihad_guest create`.';
+
+  return new EmbedBuilder()
+    .setColor(FLIGHT_COLOR)
+    .setTitle(`${ETIHAD_TAIL_EMOJI} ${user.username}'s Etihad Guest Profile`)
+    .setThumbnail(user.displayAvatarURL({ size: 256 }))
+    .setDescription(
+      `Current tier: **${tier?.label ?? 'No account yet'}**${tier ? ` <@&${tier.roleId}>` : ''}\n` +
+        `Balance: ${MILES_EMOJI} **${milesUser.balance} miles**`
+    )
+    .addFields({ name: `${tier?.label ?? 'Guest'} benefits`, value: benefits });
+}
+
+function buildProfileActions(userId) {
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`profile_flights:${userId}`).setLabel('View flights attended').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`profile_tiers:${userId}`).setLabel('View all tiers/upgrade').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`profile_shop:${userId}`).setLabel('Miles shop').setStyle(ButtonStyle.Secondary)
+    )
+  ];
+}
+
+function buildTierUpgradeComponents(user, milesUser, notice = null) {
+  const currentTierKey = currentGuestTierKey(milesUser);
+  const upgradeOptions = currentTierKey ? GUEST_TIER_ORDER.filter(key => key !== 'bronze' && tierRank(key) > tierRank(currentTierKey)).map(key => ({
+    label: GUEST_TIERS[key].label,
+    value: key,
+    description: `${GUEST_TIERS[key].price} miles`
+  })) : [];
+  const components = [buildGuestContainer(user, milesUser, notice)];
+
+  if (upgradeOptions.length) {
+    components.push(
+      new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId(`guest_upgrade_select:${user.id}`)
+          .setPlaceholder('Select a tier to upgrade')
+          .addOptions(upgradeOptions)
+      )
+    );
+  }
+
+  return components;
+}
+
 function buildShopContainer(user, milesUser, purchaseText = null) {
   const shopList = Object.entries(SHOP_ITEMS)
     .map(([key, item]) => {
@@ -672,10 +725,76 @@ client.on(Events.InteractionCreate, async interaction => {
       return;
     }
 
+    if (interaction.isButton() && interaction.customId.startsWith('profile_')) {
+      const [action, profileUserId] = interaction.customId.split(':');
+      if (profileUserId !== interaction.user.id) {
+        await interaction.reply({ content: 'Only the profile owner can use these buttons.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      const store = await loadMilesStore();
+      const milesUser = ensureMilesUser(store, interaction.user.id);
+
+      if (action === 'profile_flights') {
+        await interaction.reply({ components: [buildHistoryContainer(interaction.user, milesUser)], flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2 });
+        return;
+      }
+
+      if (action === 'profile_tiers') {
+        await interaction.reply({ components: buildTierUpgradeComponents(interaction.user, milesUser), flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2 });
+        return;
+      }
+
+      if (action === 'profile_shop') {
+        await interaction.reply({ components: [buildShopContainer(interaction.user, milesUser)], flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2 });
+        return;
+      }
+    }
+
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('guest_upgrade_select:')) {
+      const profileUserId = interaction.customId.split(':')[1];
+      if (profileUserId !== interaction.user.id) {
+        await interaction.reply({ content: 'Only the profile owner can use this menu.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      const targetTierKey = interaction.values[0];
+      const targetTier = GUEST_TIERS[targetTierKey];
+      const store = await loadMilesStore();
+      const milesUser = ensureMilesUser(store, interaction.user.id);
+      const currentTierKey = currentGuestTierKey(milesUser);
+      let notice;
+
+      if (!currentTierKey) {
+        notice = 'Create a free Bronze Etihad Guest account before upgrading.';
+      } else if (tierRank(targetTierKey) <= tierRank(currentTierKey)) {
+        notice = `You are already ${GUEST_TIERS[currentTierKey].label} or higher.`;
+      } else if (milesUser.balance < targetTier.price) {
+        notice = `You need ${MILES_EMOJI} ${targetTier.price - milesUser.balance} more miles to upgrade to **${targetTier.label}**.`;
+      } else {
+        await syncGuestTierRole(interaction, targetTierKey);
+        milesUser.balance -= targetTier.price;
+        milesUser.guest = { ...milesUser.guest, tier: targetTierKey, upgradedAt: new Date().toISOString() };
+        await saveMilesStore(store);
+        notice = `Upgraded to **${targetTier.label}** for ${MILES_EMOJI} ${targetTier.price} miles.`;
+      }
+
+      await interaction.update({ components: buildTierUpgradeComponents(interaction.user, milesUser, notice), flags: MessageFlags.IsComponentsV2 });
+      return;
+    }
+
     if (interaction.isChatInputCommand() && interaction.commandName === 'flight_history') {
       const store = await loadMilesStore();
       const milesUser = ensureMilesUser(store, interaction.user.id);
       await interaction.reply({ components: [buildHistoryContainer(interaction.user, milesUser)], flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2 });
+      return;
+    }
+
+    if (interaction.isChatInputCommand() && interaction.commandName === 'profile') {
+      const store = await loadMilesStore();
+      const milesUser = ensureMilesUser(store, interaction.user.id);
+      await interaction.reply({ embeds: [buildProfileEmbed(interaction.user, milesUser)] });
+      await interaction.followUp({ content: 'Profile actions', components: buildProfileActions(interaction.user.id), flags: MessageFlags.Ephemeral });
       return;
     }
 
@@ -687,32 +806,13 @@ client.on(Events.InteractionCreate, async interaction => {
 
       if (subcommand === 'create') {
         if (milesUser.guest) {
-          notice = 'You already have an Etihad Guest account.';
+          await interaction.reply({ content: 'You already have an Etihad Guest account.', flags: MessageFlags.Ephemeral });
+          return;
         } else {
           milesUser.guest = { tier: 'bronze', createdAt: new Date().toISOString(), upgradedAt: null };
           await syncGuestTierRole(interaction, 'bronze');
           await saveMilesStore(store);
           notice = 'Your free Bronze Etihad Guest account has been created.';
-        }
-      }
-
-      if (subcommand === 'upgrade') {
-        const targetTierKey = interaction.options.getString('tier', true);
-        const targetTier = GUEST_TIERS[targetTierKey];
-        const currentTierKey = currentGuestTierKey(milesUser);
-
-        if (!currentTierKey) {
-          notice = 'Create a free Bronze Etihad Guest account before upgrading.';
-        } else if (tierRank(targetTierKey) <= tierRank(currentTierKey)) {
-          notice = `You are already ${GUEST_TIERS[currentTierKey].label} or higher.`;
-        } else if (milesUser.balance < targetTier.price) {
-          notice = `You need ${MILES_EMOJI} ${targetTier.price - milesUser.balance} more miles to upgrade to **${targetTier.label}**.`;
-        } else {
-          milesUser.balance -= targetTier.price;
-          milesUser.guest = { ...milesUser.guest, tier: targetTierKey, upgradedAt: new Date().toISOString() };
-          await syncGuestTierRole(interaction, targetTierKey);
-          await saveMilesStore(store);
-          notice = `Upgraded to **${targetTier.label}** for ${MILES_EMOJI} ${targetTier.price} miles.`;
         }
       }
 
