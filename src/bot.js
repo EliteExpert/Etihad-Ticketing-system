@@ -1,103 +1,47 @@
 import 'dotenv/config';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
-  ChannelType,
   Client,
   ContainerBuilder,
   Events,
   GatewayIntentBits,
-  MediaGalleryBuilder,
   MessageFlags,
-  ModalBuilder,
   Partials,
   REST,
   Routes,
   SeparatorBuilder,
-  SeparatorSpacingSize,
-  SlashCommandBuilder,
-  TextDisplayBuilder,
-  TextInputBuilder,
-  TextInputStyle
+  SeparatorSpacingSize
 } from 'discord.js';
+import {
+  boardingPassApiUrl,
+  BUSINESS_ROLE_ID,
+  ETIHAD_TAIL_EMOJI,
+  FIRST_ROLE_ID,
+  FLIGHT_COLOR,
+  FLIGHT_MANAGER_ROLE_ID,
+  FLIGHT_PING_ROLE_ID,
+  GUEST_TIER_ORDER,
+  GUEST_TIERS,
+  MILES_EMOJI,
+  SHOP_COOLDOWN_MS,
+  SHOP_ITEMS,
+  SUPPORT_COLORS,
+  SUPPORT_PING_ROLE_ID,
+  SUPPORT_REQUESTS_CHANNEL_ID
+} from './config.js';
+import { commands } from './commands/index.js';
+import { ensureMilesUser, loadMilesStore, saveMilesStore } from './data/milesStore.js';
+import { footerMedia, media, modal, text } from './utils/components.js';
 
 const token = process.env.DISCORD_TOKEN;
 const clientId = process.env.DISCORD_CLIENT_ID;
 const guildId = process.env.DISCORD_GUILD_ID;
-const boardingPassApiUrl =
-  process.env.BOARDING_PASS_API_URL ?? 'https://etihad-ticketing-system-backend.onrender.com/generate-boarding-pass';
-
-const BUSINESS_ROLE_ID = '1499998210163478609';
-const FIRST_ROLE_ID = '1499998296209625258';
-const SUPPORT_REQUESTS_CHANNEL_ID = '1503282404146548878';
-const SUPPORT_PING_ROLE_ID = '1499607934844403842';
-const FLIGHT_PING_ROLE_ID = '1503399633936715906';
-const FLIGHT_MANAGER_ROLE_ID = '1503457047545512147';
-const FLIGHT_COLOR = 0x1c2a33;
-const MILES_EMOJI = '<:miles:1503446324471926824>';
-const ETIHAD_TAIL_EMOJI = '<:EtihadTail:1500012291188461660>';
-const FOOTER_IMAGE_URL =
-  'https://media.discordapp.net/attachments/1504449130603216906/1508816599958687884/Flights_footer.png?ex=6a16ea75&is=6a1598f5&hm=299ded682b918936d97724767054469b03f08e2c737dbd8bbb140e2af0726a4d&=&format=webp&quality=lossless';
-const MILES_DATA_DIR = new URL('../data/', import.meta.url);
-const MILES_DATA_FILE = new URL('../data/miles.json', import.meta.url);
-const SUPPORT_COLORS = {
-  unclaimed: 0x808080,
-  inProgress: 0xffcc00,
-  closed: 0x2ecc71,
-  relay: 0xffcc00
-};
-const SHOP_ITEMS = {
-  class_upgrade: {
-    label: 'Class upgrade voucher',
-    price: 900,
-    description: 'Use this as a staff-approved upgrade request on a future flight.'
-  },
-  lounge_pass: {
-    label: 'Lounge access pass',
-    price: 450,
-    description: 'Redeem for lounge access before one eligible flight.'
-  },
-  priority_boarding: {
-    label: 'Priority boarding pass',
-    price: 300,
-    description: 'Redeem for priority boarding on one eligible flight.'
-  },
-  skywards_badge: {
-    label: 'Skywards profile badge',
-    price: 150,
-    description: 'A low-cost cosmetic reward for frequent flyers.'
-  }
-};
 
 if (!token || !clientId || !guildId) {
   throw new Error('Missing DISCORD_TOKEN, DISCORD_CLIENT_ID, or DISCORD_GUILD_ID in environment.');
 }
-
-const commands = [
-  new SlashCommandBuilder()
-    .setName('create_flight')
-    .setDescription('Run 3 forms in sequence, then post class buttons.')
-    .addChannelOption(option =>
-      option
-        .setName('channel')
-        .setDescription('Channel to send the final message in')
-        .addChannelTypes(ChannelType.GuildText)
-        .setRequired(true)
-    ),
-  new SlashCommandBuilder().setName('flight_history').setDescription('View your attended flights and Etihad miles balance.'),
-  new SlashCommandBuilder()
-    .setName('miles_shop')
-    .setDescription('View or buy rewards with your Etihad miles.')
-    .addStringOption(option =>
-      option
-        .setName('item')
-        .setDescription('Reward to buy. Leave blank to view the shop.')
-        .setRequired(false)
-        .addChoices(...Object.entries(SHOP_ITEMS).map(([value, item]) => ({ name: `${item.label} - ${item.price} miles`, value })))
-    )
-].map(command => command.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(token);
 await rest.put(Routes.applicationGuildCommands(clientId, guildId), { body: commands });
@@ -105,35 +49,6 @@ await rest.put(Routes.applicationGuildCommands(clientId, guildId), { body: comma
 const sessions = new Map();
 const supportTicketsByUser = new Map();
 const supportTicketsByThread = new Map();
-
-function text(content) {
-  return new TextDisplayBuilder().setContent(content);
-}
-
-function media(url) {
-  return new MediaGalleryBuilder().addItems({ media: { url } });
-}
-
-function footerMedia() {
-  return media(FOOTER_IMAGE_URL);
-}
-
-function modal(customId, title, fields) {
-  const m = new ModalBuilder().setCustomId(customId).setTitle(title);
-  m.addComponents(
-    ...fields.map(f =>
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId(f.id)
-          .setLabel(f.label)
-          .setRequired(true)
-          .setStyle(TextInputStyle.Short)
-          .setPlaceholder(f.placeholder ?? '')
-      )
-    )
-  );
-  return m;
-}
 
 const form1 = modal('form_1', 'Form 1', [
   { id: 'flight_number', label: 'Enter the flight number' },
@@ -270,32 +185,38 @@ function resolveShopItem(value) {
   return Object.entries(SHOP_ITEMS).find(([, item]) => normalizeShopKey(item.label) === normalized) ?? [null, null];
 }
 
+function formatRelativeTime(timestamp) {
+  return `<t:${Math.floor(timestamp / 1000)}:R>`;
+}
+
+function activeShopCooldown(milesUser, itemKey) {
+  const expiresAt = milesUser.shopCooldowns?.[itemKey] ?? 0;
+  return expiresAt > Date.now() ? expiresAt : null;
+}
+
+function currentGuestTierKey(milesUser) {
+  return milesUser.guest?.tier ?? null;
+}
+
+function tierRank(tierKey) {
+  return GUEST_TIER_ORDER.indexOf(tierKey);
+}
+
+function formatTierBenefits(tier) {
+  return tier.benefits.map(benefit => `- ${benefit}`).join('\n');
+}
+
+async function syncGuestTierRole(interaction, tierKey) {
+  const member = await interaction.guild?.members.fetch(interaction.user.id).catch(() => null);
+  if (!member?.roles?.cache) return;
+
+  const tierRoleIds = Object.values(GUEST_TIERS).map(tier => tier.roleId);
+  await member.roles.remove(tierRoleIds.filter(roleId => roleId !== GUEST_TIERS[tierKey].roleId)).catch(() => null);
+  await member.roles.add(GUEST_TIERS[tierKey].roleId).catch(() => null);
+}
+
 function randomInt(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
-}
-
-async function loadMilesStore() {
-  try {
-    const raw = await readFile(MILES_DATA_FILE, 'utf8');
-    const parsed = JSON.parse(raw);
-    return parsed?.users ? parsed : { users: {} };
-  } catch (error) {
-    if (error.code !== 'ENOENT') console.error(error);
-    return { users: {} };
-  }
-}
-
-async function saveMilesStore(store) {
-  await mkdir(MILES_DATA_DIR, { recursive: true });
-  await writeFile(MILES_DATA_FILE, JSON.stringify(store, null, 2));
-}
-
-function ensureMilesUser(store, userId) {
-  store.users[userId] ??= { balance: 0, flights: [], purchases: [] };
-  store.users[userId].balance ??= 0;
-  store.users[userId].flights ??= [];
-  store.users[userId].purchases ??= [];
-  return store.users[userId];
 }
 
 function flightRecord(session, cls, miles) {
@@ -373,8 +294,11 @@ function buildSupportConnectingContainer() {
     .setAccentColor(SUPPORT_COLORS.inProgress)
     .addTextDisplayComponents(
       text(
-        '**Etihad • Connecting You To An Agent**\n' +
-          'Hello, welcome to Etihad Customer Service Hub. We have received your message and are connecting you to an agent. Please stay with us so we can assist you quickly and efficiently.'
+        '<:EtihadTail:1500012291188461660> **Etihad Airways** <:Dot:1510674589020328148> __We have received your message and are connecting you with a customer service agent.__\n\n' +
+          'Hello and welcome to **<:support:1500907655466844231> Etihad Customer Service Centre**.\n\n' +
+          'Thank you for contacting us. A member of our support team will be with you shortly to assist you as quickly and efficiently as possible.\n\n' +
+          '<:support:1500907655466844231> **Etihad Airways Customer Service**\n' +
+          '-# **BEYOND BORDERS**'
       )
     );
 }
@@ -586,9 +510,36 @@ function buildHistoryContainer(user, milesUser) {
     );
 }
 
+function buildGuestContainer(user, milesUser, notice = null) {
+  const tierKey = currentGuestTierKey(milesUser);
+  const currentTier = tierKey ? GUEST_TIERS[tierKey] : null;
+  const tierLines = GUEST_TIER_ORDER.map(key => {
+    const tier = GUEST_TIERS[key];
+    const marker = key === tierKey ? 'Current' : `${MILES_EMOJI} ${tier.price} miles`;
+    return `- **${tier.label}** <@&${tier.roleId}>: ${marker}\n${formatTierBenefits(tier)}`;
+  }).join('\n\n');
+
+  return new ContainerBuilder()
+    .setAccentColor(FLIGHT_COLOR)
+    .addTextDisplayComponents(
+      text(
+        `${ETIHAD_TAIL_EMOJI} **Etihad Guest**\n` +
+          `Passenger: ${user}\n` +
+          `Tier: **${currentTier?.label ?? 'No account yet'}**${currentTier ? ` <@&${currentTier.roleId}>` : ''}\n` +
+          `Balance: ${MILES_EMOJI} **${milesUser.balance} miles**\n\n` +
+          `${notice ? `${notice}\n\n` : ''}` +
+          `**Tiers and benefits**\n${tierLines}`
+      )
+    );
+}
+
 function buildShopContainer(user, milesUser, purchaseText = null) {
   const shopList = Object.entries(SHOP_ITEMS)
-    .map(([, item]) => `- **${item.label}**: ${MILES_EMOJI} ${item.price} miles\n  ${item.description}`)
+    .map(([key, item]) => {
+      const cooldown = activeShopCooldown(milesUser, key);
+      const cooldownText = cooldown ? `\n  Cooldown: available ${formatRelativeTime(cooldown)}` : '';
+      return `- **${item.label}**: ${MILES_EMOJI} ${item.price} miles\n  ${item.description}${cooldownText}`;
+    })
     .join('\n');
   const purchased = milesUser.purchases.length
     ? `\n\nRecent purchases:\n${milesUser.purchases.slice(-3).reverse().map(item => `- ${item.label} (${MILES_EMOJI} ${item.price} miles)`).join('\n')}`
@@ -728,6 +679,47 @@ client.on(Events.InteractionCreate, async interaction => {
       return;
     }
 
+    if (interaction.isChatInputCommand() && interaction.commandName === 'etihad_guest') {
+      const subcommand = interaction.options.getSubcommand();
+      const store = await loadMilesStore();
+      const milesUser = ensureMilesUser(store, interaction.user.id);
+      let notice = null;
+
+      if (subcommand === 'create') {
+        if (milesUser.guest) {
+          notice = 'You already have an Etihad Guest account.';
+        } else {
+          milesUser.guest = { tier: 'bronze', createdAt: new Date().toISOString(), upgradedAt: null };
+          await syncGuestTierRole(interaction, 'bronze');
+          await saveMilesStore(store);
+          notice = 'Your free Bronze Etihad Guest account has been created.';
+        }
+      }
+
+      if (subcommand === 'upgrade') {
+        const targetTierKey = interaction.options.getString('tier', true);
+        const targetTier = GUEST_TIERS[targetTierKey];
+        const currentTierKey = currentGuestTierKey(milesUser);
+
+        if (!currentTierKey) {
+          notice = 'Create a free Bronze Etihad Guest account before upgrading.';
+        } else if (tierRank(targetTierKey) <= tierRank(currentTierKey)) {
+          notice = `You are already ${GUEST_TIERS[currentTierKey].label} or higher.`;
+        } else if (milesUser.balance < targetTier.price) {
+          notice = `You need ${MILES_EMOJI} ${targetTier.price - milesUser.balance} more miles to upgrade to **${targetTier.label}**.`;
+        } else {
+          milesUser.balance -= targetTier.price;
+          milesUser.guest = { ...milesUser.guest, tier: targetTierKey, upgradedAt: new Date().toISOString() };
+          await syncGuestTierRole(interaction, targetTierKey);
+          await saveMilesStore(store);
+          notice = `Upgraded to **${targetTier.label}** for ${MILES_EMOJI} ${targetTier.price} miles.`;
+        }
+      }
+
+      await interaction.reply({ components: [buildGuestContainer(interaction.user, milesUser, notice)], flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2 });
+      return;
+    }
+
     if (interaction.isChatInputCommand() && interaction.commandName === 'miles_shop') {
       const selectedItem = interaction.options.getString('item');
       const store = await loadMilesStore();
@@ -736,12 +728,16 @@ client.on(Events.InteractionCreate, async interaction => {
 
       if (selectedItem) {
         const [selectedKey, item] = resolveShopItem(selectedItem);
+        const cooldown = selectedKey ? activeShopCooldown(milesUser, selectedKey) : null;
         if (!item) {
           purchaseText = 'That shop item could not be found.';
+        } else if (cooldown) {
+          purchaseText = `**${item.label}** is on cooldown until ${formatRelativeTime(cooldown)}.`;
         } else if (milesUser.balance < item.price) {
           purchaseText = `You need ${MILES_EMOJI} ${item.price - milesUser.balance} more miles to buy **${item.label}**.`;
         } else {
           milesUser.balance -= item.price;
+          milesUser.shopCooldowns[selectedKey] = Date.now() + SHOP_COOLDOWN_MS;
           milesUser.purchases.push({ key: selectedKey, label: item.label, price: item.price, boughtAt: new Date().toISOString() });
           await saveMilesStore(store);
           purchaseText = `Purchased **${item.label}** for ${MILES_EMOJI} ${item.price} miles.`;
