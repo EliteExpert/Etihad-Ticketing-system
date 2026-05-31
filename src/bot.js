@@ -209,14 +209,28 @@ function formatTierBenefits(tier) {
 }
 
 async function syncGuestTierRole(interaction, tierKey) {
-  const member = await interaction.guild?.members.fetch(interaction.user.id).catch(() => null);
-  if (!member?.roles?.cache) return false;
+  const guild = interaction.guild;
+  if (!guild) return { ok: false, reason: 'This can only be used inside the server.' };
+
+  const member = await guild.members.fetch(interaction.user.id).catch(() => null);
+  if (!member?.roles?.cache) return { ok: false, reason: 'I could not fetch your server member profile.' };
 
   const tierRoleIds = Object.values(GUEST_TIERS).map(tier => tier.roleId);
   const targetRoleId = GUEST_TIERS[tierKey].roleId;
+  const targetRole = await guild.roles.fetch(targetRoleId).catch(() => null);
+  if (!targetRole) return { ok: false, reason: `The role <@&${targetRoleId}> could not be found.` };
+
   await member.roles.remove(tierRoleIds.filter(roleId => roleId !== targetRoleId)).catch(() => null);
-  await member.roles.add(targetRoleId);
-  return true;
+
+  try {
+    await member.roles.add(targetRoleId, `Etihad Guest ${GUEST_TIERS[tierKey].label} tier`);
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      reason: `I could not assign <@&${targetRoleId}>. Please check my Manage Roles permission and role position.`
+    };
+  }
 }
 
 function randomInt(min, max) {
@@ -772,11 +786,15 @@ client.on(Events.InteractionCreate, async interaction => {
       } else if (milesUser.balance < targetTier.price) {
         notice = `You need ${MILES_EMOJI} ${targetTier.price - milesUser.balance} more miles to upgrade to **${targetTier.label}**.`;
       } else {
-        await syncGuestTierRole(interaction, targetTierKey);
-        milesUser.balance -= targetTier.price;
-        milesUser.guest = { ...milesUser.guest, tier: targetTierKey, upgradedAt: new Date().toISOString() };
-        await saveMilesStore(store);
-        notice = `Upgraded to **${targetTier.label}** for ${MILES_EMOJI} ${targetTier.price} miles.`;
+        const roleSync = await syncGuestTierRole(interaction, targetTierKey);
+        if (!roleSync.ok) {
+          notice = roleSync.reason;
+        } else {
+          milesUser.balance -= targetTier.price;
+          milesUser.guest = { ...milesUser.guest, tier: targetTierKey, upgradedAt: new Date().toISOString() };
+          await saveMilesStore(store);
+          notice = `Upgraded to **${targetTier.label}** for ${MILES_EMOJI} ${targetTier.price} miles.`;
+        }
       }
 
       await interaction.update({ components: buildTierUpgradeComponents(interaction.user, milesUser, notice), flags: MessageFlags.IsComponentsV2 });
@@ -793,8 +811,7 @@ client.on(Events.InteractionCreate, async interaction => {
     if (interaction.isChatInputCommand() && interaction.commandName === 'profile') {
       const store = await loadMilesStore();
       const milesUser = ensureMilesUser(store, interaction.user.id);
-      await interaction.reply({ embeds: [buildProfileEmbed(interaction.user, milesUser)] });
-      await interaction.followUp({ content: 'Profile actions', components: buildProfileActions(interaction.user.id), flags: MessageFlags.Ephemeral });
+      await interaction.reply({ embeds: [buildProfileEmbed(interaction.user, milesUser)], components: buildProfileActions(interaction.user.id) });
       return;
     }
 
@@ -810,9 +827,9 @@ client.on(Events.InteractionCreate, async interaction => {
           return;
         } else {
           milesUser.guest = { tier: 'bronze', createdAt: new Date().toISOString(), upgradedAt: null };
-          await syncGuestTierRole(interaction, 'bronze');
+          const roleSync = await syncGuestTierRole(interaction, 'bronze');
           await saveMilesStore(store);
-          notice = 'Your free Bronze Etihad Guest account has been created.';
+          notice = roleSync.ok ? 'Your free Bronze Etihad Guest account has been created.' : `Your free Bronze Etihad Guest account has been created.\n${roleSync.reason}`;
         }
       }
 
