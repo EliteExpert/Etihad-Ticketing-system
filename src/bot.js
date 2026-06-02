@@ -300,6 +300,10 @@ function randomInt(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
+function userDisplayName(user) {
+  return user.globalName ?? user.username ?? String(user);
+}
+
 function flightRecord(session, cls, miles) {
   const data = session.flightData;
   return {
@@ -413,7 +417,7 @@ async function updateSupportRequestMessage(ticket, content) {
   });
 }
 
-async function createSupportRequest(message, content) {
+async function createSupportRequest(message) {
   const supportChannel = await client.channels.fetch(SUPPORT_REQUESTS_CHANNEL_ID);
   if (!supportChannel?.isTextBased()) throw new Error('Support requests channel is not a text channel.');
 
@@ -428,19 +432,30 @@ async function createSupportRequest(message, content) {
   };
 
   const requestMessage = await supportChannel.send({
-    components: [buildSupportRequestContainer(message.author, content, ticket), ...buildSupportActions(message.author.id, ticket)],
+    components: [buildSupportRequestContainer(message.author, 'Waiting for passenger issue.', ticket), ...buildSupportActions(message.author.id, ticket)],
     flags: MessageFlags.IsComponentsV2
   });
 
   ticket.requestMessageId = requestMessage.id;
+  const thread = await requestMessage.startThread({
+    name: `support-${ticket.userTag}`.replace(/[^a-z0-9-_]/gi, '-').slice(0, 90),
+    autoArchiveDuration: 1440
+  });
+  ticket.threadId = thread.id;
   supportTicketsByUser.set(message.author.id, ticket);
+  supportTicketsByThread.set(thread.id, message.author.id);
+  await thread.send({
+    components: [buildRelayContainer('Etihad Support', `Support request opened for ${message.author.tag}. Waiting for the passenger issue.`)],
+    flags: MessageFlags.IsComponentsV2
+  });
   await message.reply({ components: [buildSupportConnectingContainer()], flags: MessageFlags.IsComponentsV2 });
+  await message.channel.send('Please enter your issue so our support team can assist you.');
 }
 
 async function forwardUserMessageToSupport(message, ticket, content) {
   if (ticket.status === 'closed') {
     supportTicketsByUser.delete(message.author.id);
-    await createSupportRequest(message, content);
+    await createSupportRequest(message);
     return;
   }
 
@@ -448,6 +463,7 @@ async function forwardUserMessageToSupport(message, ticket, content) {
     const thread = await client.channels.fetch(ticket.threadId);
     if (!thread?.isTextBased()) throw new Error('Saved support thread is not a text channel.');
     await thread.send({ components: [buildRelayContainer(message.author.tag, content)], flags: MessageFlags.IsComponentsV2 });
+    await updateSupportRequestMessage(ticket, content).catch(() => null);
     return;
   }
 
@@ -605,7 +621,7 @@ function buildGuestContainer(user, milesUser, notice = null) {
     .addTextDisplayComponents(
       text(
         `${ETIHAD_TAIL_EMOJI} **Etihad Guest**\n` +
-          `Passenger: ${user}\n` +
+          `Passenger: **${userDisplayName(user)}**\n` +
           `Tier: **${currentTier?.label ?? 'No account yet'}**${currentTier ? ` <@&${currentTier.roleId}>` : ''}\n` +
           `Balance: ${MILES_EMOJI} **${milesUser.balance} miles**\n\n` +
           `${notice ? `${notice}\n\n` : ''}` +
@@ -680,7 +696,7 @@ function buildShopContainer(user, milesUser, purchaseText = null) {
     .addTextDisplayComponents(
       text(
         `**Etihad Miles Shop**\n` +
-          `Passenger: ${user}\n` +
+          `Passenger: **${userDisplayName(user)}**\n` +
           `Balance: ${MILES_EMOJI} **${milesUser.balance} miles**\n\n` +
           `${purchaseText ? `${purchaseText}\n\n` : ''}` +
           `${shopList}${purchased}`
@@ -717,7 +733,7 @@ client.on(Events.MessageCreate, async message => {
       const content = messageTextWithAttachments(message);
       const ticket = supportTicketsByUser.get(message.author.id);
       if (!ticket) {
-        await createSupportRequest(message, content);
+        await createSupportRequest(message);
         return;
       }
       await forwardUserMessageToSupport(message, ticket, content);
@@ -798,15 +814,17 @@ client.on(Events.InteractionCreate, async interaction => {
         await interaction.reply({ content: 'This support request could not be found.', flags: MessageFlags.Ephemeral });
         return;
       }
-      if (ticket.threadId) {
+      if (ticket.claimedBy) {
         await interaction.reply({ content: `This support request is already claimed in <#${ticket.threadId}>.`, flags: MessageFlags.Ephemeral });
         return;
       }
 
-      const thread = await interaction.message.startThread({
-        name: `support-${ticket.userTag}`.replace(/[^a-z0-9-_]/gi, '-').slice(0, 90),
-        autoArchiveDuration: 1440
-      });
+      const thread =
+        (ticket.threadId ? await client.channels.fetch(ticket.threadId).catch(() => null) : null) ??
+        (await interaction.message.startThread({
+          name: `support-${ticket.userTag}`.replace(/[^a-z0-9-_]/gi, '-').slice(0, 90),
+          autoArchiveDuration: 1440
+        }));
 
       ticket.threadId = thread.id;
       ticket.claimedBy = interaction.user.id;

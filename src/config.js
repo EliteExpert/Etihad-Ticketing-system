@@ -18,7 +18,7 @@ export const SUPPORT_COLORS = {
   unclaimed: 0x808080,
   inProgress: 0xffcc00,
   closed: 0x2ecc71,
-  relay: 0xffcc00
+  relay: FLIGHT_COLOR
 };
 
 export const SHOP_COOLDOWN_MS = 2 * 24 * 60 * 60 * 1000;
@@ -38,11 +38,6 @@ export const SHOP_ITEMS = {
     label: 'Priority boarding pass',
     price: 300,
     description: 'Redeem for priority boarding on one eligible flight.'
-  },
-  skywards_badge: {
-    label: 'Skywards profile badge',
-    price: 150,
-    description: 'A low-cost cosmetic reward for frequent flyers.'
   }
 };
 
@@ -51,31 +46,42 @@ export const GUEST_TIERS = {
     label: 'Bronze',
     roleId: '1510676949276688555',
     price: 0,
-    benefits: ['Etihad Guest account access', 'Earn and redeem Etihad miles']
+    benefits: ['Get free wifi on board', 'Earn and redeem Etihad miles']
   },
   silver: {
     label: 'Silver',
     roleId: '1510677098262564864',
     price: 1500,
-    benefits: ['Priority check-in recognition', 'Silver member profile status']
+    benefits: ['Use your Miles to upgrade on selected routes', 'Priority for boarding gates', 'Eligible for upgrades when seats are open']
   },
   gold: {
     label: 'Gold',
     roleId: '1510677169125195936',
     price: 3500,
-    benefits: ['Priority boarding recognition', 'Gold member profile status']
+    benefits: [
+      'All benefits from Silver',
+      '+30% bonus points on all Etihad PTFS flights',
+      'Access to the Business class Lounge (Abu Dhabi Hub)',
+      'Extra baggage slots for long-haul PTFS routes'
+    ]
   },
   platinum: {
     label: 'Platinum',
     roleId: '1510677230370422844',
     price: 7000,
-    benefits: ['Premium support recognition', 'Platinum member profile status']
+    benefits: ['All benefits from Gold', '+75% bonus points per flight', 'Access to Business Class lounges worldwide', 'Priority baggage handling at all PTFS airports']
   },
   emerald: {
     label: 'Emerald',
     roleId: '1510677294799126740',
     price: 12000,
-    benefits: ['Highest Etihad Guest recognition', 'Emerald member profile status']
+    benefits: [
+      'All benefits from Platinum',
+      '+100% bonus points per flight',
+      'Access to First Class lounges & exclusive A380 suite',
+      'Complimentary flight upgrades for one friend per event',
+      'Gift a Gold Tier role to any person of your choice'
+    ]
   }
 };
 
