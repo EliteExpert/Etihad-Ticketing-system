@@ -232,7 +232,18 @@ function tierRank(tierKey) {
 }
 
 function formatTierBenefits(tier) {
-  return tier.benefits.map(benefit => `- ${benefit}`).join('\n');
+  return tier.benefits.map(benefit => `<:arrow:1511320187742457897> ${benefit}`).join('\n');
+}
+
+function formatTierLine(tierKey, currentTierKey) {
+  const tier = GUEST_TIERS[tierKey];
+  const marker = tierKey === currentTierKey ? 'Current' : `${MILES_EMOJI} ${tier.price} miles`;
+  return `**${tier.label}** <@&${tier.roleId}>: ${marker}\n${formatTierBenefits(tier)}`;
+}
+
+function tierFromMemberRoles(member) {
+  if (!member?.roles?.cache) return null;
+  return [...GUEST_TIER_ORDER].reverse().find(tierKey => member.roles.cache.has(GUEST_TIERS[tierKey].roleId)) ?? null;
 }
 
 function formatGuestSummary(user, milesUser) {
@@ -304,7 +315,7 @@ function userDisplayName(user) {
   return user.globalName ?? user.username ?? String(user);
 }
 
-function flightRecord(session, cls, miles) {
+function flightRecord(session, cls, miles, tierKey = null, baseMiles = miles, bonusMiles = 0) {
   const data = session.flightData;
   return {
     flight: data['flight-details.flight-number'],
@@ -313,6 +324,9 @@ function flightRecord(session, cls, miles) {
     classType: cls.classType,
     className: cls.shortName,
     miles,
+    baseMiles,
+    bonusMiles,
+    tier: tierKey ? GUEST_TIERS[tierKey].label : null,
     date: data['flight-details2.date'],
     completedAt: new Date().toISOString()
   };
@@ -320,7 +334,12 @@ function flightRecord(session, cls, miles) {
 
 function formatMilesAwards(awards) {
   if (!awards.length) return 'No passengers were booked, so no miles were distributed.';
-  return awards.map(award => `- **${award.displayName}**: ${MILES_EMOJI} ${award.miles} miles (${award.className})`).join('\n');
+  return awards
+    .map(award => {
+      const bonusText = award.bonusMiles ? `, includes ${MILES_EMOJI} ${award.bonusMiles} ${award.tierName} bonus` : '';
+      return `- **${award.displayName}**: ${MILES_EMOJI} ${award.miles} miles (${award.className}${bonusText})`;
+    })
+    .join('\n');
 }
 
 function messageTextWithAttachments(message) {
@@ -376,12 +395,13 @@ function buildSupportRequestContainer(user, content, ticket) {
 
 function buildSupportConnectingContainer() {
   return new ContainerBuilder()
-    .setAccentColor(SUPPORT_COLORS.inProgress)
+    .setAccentColor(FLIGHT_COLOR)
     .addTextDisplayComponents(
       text(
         '<:EtihadTail:1500012291188461660> **Etihad Airways** <:Dot:1510674589020328148> __We have received your message and are connecting you with a customer service agent.__\n\n' +
           'Hello and welcome to **<:support:1500907655466844231> Etihad Customer Service Centre**.\n\n' +
           'Thank you for contacting us. A member of our support team will be with you shortly to assist you as quickly and efficiently as possible.\n\n' +
+          'Please enter your issue so our support team can assist you.\n\n' +
           '<:support:1500907655466844231> **Etihad Airways Customer Service**\n' +
           '-# **BEYOND BORDERS**'
       )
@@ -449,7 +469,6 @@ async function createSupportRequest(message) {
     flags: MessageFlags.IsComponentsV2
   });
   await message.reply({ components: [buildSupportConnectingContainer()], flags: MessageFlags.IsComponentsV2 });
-  await message.channel.send('Please enter your issue so our support team can assist you.');
 }
 
 async function forwardUserMessageToSupport(message, ticket, content) {
@@ -565,7 +584,7 @@ async function generateBoardingPass(payload) {
   return result.image_url ?? result.output ?? result.download_url;
 }
 
-async function finishFlight(session) {
+async function finishFlight(session, guild = null) {
   if (session.finished) return session.milesAwards ?? [];
 
   const store = await loadMilesStore();
@@ -577,12 +596,17 @@ async function finishFlight(session) {
       const userId = userIdFromMention(mention);
       if (!userId) continue;
 
-      const miles = randomInt(cls.milesRange[0], cls.milesRange[1]);
+      const baseMiles = randomInt(cls.milesRange[0], cls.milesRange[1]);
+      const member = guild ? await guild.members.fetch(userId).catch(() => null) : null;
+      const tierKey = tierFromMemberRoles(member);
+      const tier = tierKey ? GUEST_TIERS[tierKey] : null;
+      const bonusMiles = Math.round(baseMiles * (tier?.bonusMultiplier ?? 0));
+      const miles = baseMiles + bonusMiles;
       const user = ensureMilesUser(store, userId);
       const displayName = session.bookings[userId]?.passengerName ?? `User ${userId}`;
       user.balance += miles;
-      user.flights.push(flightRecord(session, cls, miles));
-      awards.push({ userId, displayName, miles, className: cls.shortName });
+      user.flights.push(flightRecord(session, cls, miles, tierKey, baseMiles, bonusMiles));
+      awards.push({ userId, displayName, miles, baseMiles, bonusMiles, tierName: tier?.label ?? null, className: cls.shortName });
     }
   }
 
@@ -596,7 +620,10 @@ function buildHistoryContainer(user, milesUser) {
   const flights = milesUser.flights.slice(-10).reverse();
   const history = flights.length
     ? flights
-        .map(flight => `- **${flight.flight}**: ${flight.departureAirport} to ${flight.arrivalAirport} | ${flight.className} | ${MILES_EMOJI} +${flight.miles} miles`)
+        .map(flight => {
+          const bonusText = flight.bonusMiles ? ` (${flight.tier} bonus +${flight.bonusMiles})` : '';
+          return `- **${flight.flight}**: ${flight.departureAirport} to ${flight.arrivalAirport} | ${flight.className} | ${MILES_EMOJI} +${flight.miles} miles${bonusText}`;
+        })
         .join('\n')
     : 'No attended flights yet.';
 
@@ -610,11 +637,7 @@ function buildHistoryContainer(user, milesUser) {
 function buildGuestContainer(user, milesUser, notice = null) {
   const tierKey = currentGuestTierKey(milesUser);
   const currentTier = tierKey ? GUEST_TIERS[tierKey] : null;
-  const tierLines = GUEST_TIER_ORDER.map(key => {
-    const tier = GUEST_TIERS[key];
-    const marker = key === tierKey ? 'Current' : `${MILES_EMOJI} ${tier.price} miles`;
-    return `- **${tier.label}** <@&${tier.roleId}>: ${marker}\n${formatTierBenefits(tier)}`;
-  }).join('\n\n');
+  const tierLines = GUEST_TIER_ORDER.map(key => formatTierLine(key, tierKey)).join('\n\n');
 
   return new ContainerBuilder()
     .setAccentColor(FLIGHT_COLOR)
@@ -625,7 +648,7 @@ function buildGuestContainer(user, milesUser, notice = null) {
           `Tier: **${currentTier?.label ?? 'No account yet'}**${currentTier ? ` <@&${currentTier.roleId}>` : ''}\n` +
           `Balance: ${MILES_EMOJI} **${milesUser.balance} miles**\n\n` +
           `${notice ? `${notice}\n\n` : ''}` +
-          `**Tiers and benefits**\n${tierLines}`
+          `**Tiers and benefits:**\n\n${tierLines}`
       )
     );
 }
@@ -1207,7 +1230,7 @@ client.on(Events.InteractionCreate, async interaction => {
           return;
         }
 
-        const awards = await finishFlight(s);
+        const awards = await finishFlight(s, interaction.guild);
         await editFlightMessage(s, interaction.message);
         await interaction.reply({
           components: [new ContainerBuilder().setAccentColor(FLIGHT_COLOR).addTextDisplayComponents(text(`**Flight finished**\n${formatMilesAwards(awards)}`))],
